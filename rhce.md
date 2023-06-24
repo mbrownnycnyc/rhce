@@ -23,7 +23,7 @@
 mkdir -p ~/vagrant/ansible
 vim ~/vagrant/ansible/Vagrantfile
 cd ~/vagrant/ansible
-vagrant up
+vagrant up --parallel
 ```
 
 ## building the vagrant labs
@@ -56,7 +56,7 @@ cat .\Vagrantfile | % {$_ -replace "centos/stream8","bento/centos-stream-8"} | s
 * this will take a while (an hour or so) and may require initial interaction.
 ```
 cd ~/vagrant/ansible
-vagrant up
+vagrant up --parallel
 ```
 
 6. register the RHEL VM with redhat
@@ -87,7 +87,7 @@ vagrant status
 vagrant halt
 
 #power up VMs
-vagrant up
+vagrant up --parallel
 
 #destroy VMs
 vagrant destroy
@@ -396,4 +396,255 @@ localhost | CHANGED => {
 ```
 #you can set this up as a read only variable in the bash login script (not editable by regular users)
 declare -xr ANSIBLE_CONFIG=/etc/ansible/ansible.cfg
+```
+
+# Managing ansible inventories
+
+* an inventory list of nodes
+* default inventory `/etc/ansible/hosts`
+
+## inventory types
+
+1. if you run `ansible-config dump --only-changed`, you can see DEFAULT_HOST_LIST
+```
+[vagrant@rhel8 ~]$ ansible-config dump --only-changed
+DEFAULT_BECOME(/home/vagrant/.ansible.cfg) = True
+DEFAULT_HOST_LIST(/home/vagrant/.ansible.cfg) = ['/home/vagrant/inventory']
+DEFAULT_REMOTE_USER(/home/vagrant/.ansible.cfg) = tux
+```
+
+2. take a look at the existing inventory
+```
+[vagrant@rhel8 ~]$ ansible-inventory --host localhost
+[WARNING]: Unable to parse /home/vagrant/inventory as an inventory source
+[WARNING]: No inventory was parsed, only implicit localhost is available
+{
+    "ansible_connection": "local",
+    "ansible_python_interpreter": "/usr/libexec/platform-python"
+}
+```
+
+3. use the inventory
+```
+[vagrant@rhel8 ~]$ ansible localhost -m ping
+[WARNING]: Unable to parse /home/vagrant/inventory as an inventory source
+[WARNING]: No inventory was parsed, only implicit localhost is available
+localhost | SUCCESS => {
+    "changed": false,
+    "ping": "pong"
+}
+```
+
+## creating inventory file and undersatnd groups
+
+1. create the file
+```
+[vagrant@rhel8 ~]$ cat ~/inventory
+192.168.33.11
+192.168.33.12
+192.168.33.13
+```
+
+2. review implicit groups:
+```
+[vagrant@rhel8 ~]$ ansible --list all
+  hosts (3):
+    192.168.33.11
+    192.168.33.12
+    192.168.33.13
+
+[vagrant@rhel8 ~]$ ansible --list ungrouped
+  hosts (3):
+    192.168.33.11
+    192.168.33.12
+    192.168.33.13
+```
+
+3. create the groups in the inventory file
+```
+[vagrant@rhel8 ~]$ cat ~/inventory
+[rhel]
+192.168.33.11
+[stream]
+192.168.33.12
+[ubuntu]
+192.168.33.13
+[Redhat:children]
+stream
+rhel
+```
+* note the use of groups, and children groups (must be designated via `*:children`)
+
+4. list out these created groups
+```
+[vagrant@rhel8 ~]$ ansible --list rhel
+  hosts (1):
+    192.168.33.11
+[vagrant@rhel8 ~]$ ansible --list Redhat
+  hosts (2):
+    192.168.33.12
+    192.168.33.11
+```
+
+## inventory output formats
+
+1. list inventory in json
+```
+[vagrant@rhel8 ~]$ ansible-inventory --list
+{
+    "Redhat": {
+        "children": [
+            "rhel",
+            "stream"
+        ]
+    },
+    "_meta": {
+        "hostvars": {}
+    },
+    "all": {
+        "children": [
+            "Redhat",
+            "ubuntu",
+            "ungrouped"
+        ]
+    },
+    "rhel": {
+        "hosts": [
+            "192.168.33.11"
+        ]
+    },
+    "stream": {
+        "hosts": [
+            "192.168.33.12"
+        ]
+    },
+    "ubuntu": {
+        "hosts": [
+            "192.168.33.13"
+        ]
+    }
+}
+```
+   
+2. list ansible inventory in yaml
+```
+[vagrant@rhel8 ~]$ ansible-inventory --list Redhat -y
+all:
+  children:
+    Redhat:
+      children:
+        rhel:
+          hosts:
+            192.168.33.11: {}
+        stream:
+          hosts:
+            192.168.33.12: {}
+    ubuntu:
+      hosts:
+        192.168.33.13: {}
+    ungrouped: {}
+```
+
+## implement inventory variables
+* create host_vars and group_vars directory for groups
+  * for host_vars, we'll leverage the `ansible_connection` directive to set the connection type
+
+1. create a host_vars file
+```
+cd ~
+mkdir host_vars
+echo "ansible_connection: local" > ~/host_vars/192.168.33.11
+```
+
+2. list the host variable
+```
+[vagrant@rhel8 ~]$ ansible-inventory --host 192.168.33.11
+{
+    "ansible_connection": "local"
+}
+```
+
+3. use the host variable in an ansible invocation
+```
+[vagrant@rhel8 ~]$ ansible 192.168.33.11 -m ping
+192.168.33.11 | SUCCESS => {
+    "ansible_facts": {
+        "discovered_interpreter_python": "/usr/libexec/platform-python"
+    },
+    "changed": false,
+    "ping": "pong"
+}
+```
+
+## build dynamic inventories
+* script to discover hosts and then create inventories
+
+1. install nmap and scan
+```
+sudo yum -y install nmap
+sudo nmap -Pn -p22 -n 192.168.33.0/24 --open
+sudo nmap -Pn -p22 -n 192.168.33.0/24 --oG -
+#use awk to only take the second string in lines that contain "22/open" and print the second space-separated string
+sudo nmap -Pn -p22 -n 192.168.33.0/24 --oG - | awk '/22\/open/ { print $2 }' > ~/nmap_inventory
+```
+
+# managing nodes using ad-hoc commands
+
+1. copy vagrant keys to controller
+
+2. connect to systems to test and collect node public keys
+
+3. create `tux` user with sudo rights
+
+4. generate keys for vagrant to log in as `tux` on remote systems and distributed to remote nodes
+
+5. adjust ansible.cfg to use private key
+
+
+## place private keys on the controller system
+
+1. locate the current keys that vagrant client uses
+```
+#on the host system
+cd ~/vagrant/ansible
+$vagrantVMs = vagrant status | sls "running" | % {($_ -split "\s+")[0]}
+$vagrantsshconfigstrs = @()
+$vagrantVMs | % { $vagrantsshconfigstrs += , ( ((vagrant ssh-config $_) -replace "^\s+","" ) | ? { $_.length -gt 0} ) }
+```
+
+4. because the vagrant-scp has a bug where it doesn't parse Windows filepaths correctly, and because i refuse to use WSL, here's a powershell function that creates an object out of `vagrant ssh-config` output
+   
+```
+#capture the vagrant VMs' ssh config
+$vagrantsshconfigs = @()
+foreach ($item in $vagrantsshconfigstrs ) {
+  
+  #create a new object that stores all the key-values of the vagrant ssh config
+  $vagrantsshconfig = new-object psobject
+
+  foreach ($line in $item) {
+    [regex]$rex="^(?<property>\w+)\s(?<value>.*)"
+    $keyvalue = $rex.match($line)
+    $vagrantsshconfig | add-member -notepropertyname $($keyvalue.groups["property"].value) -notepropertyvalue $($keyvalue.groups["value"].value)
+  }
+
+  $vagrantsshconfigs += , $vagrantsshconfig
+}
+
+#copy keys to targets that aren't rhel8
+$rhel8host = ($vagrantsshconfigs | ? {$_.host -like "rhel8"}).hostname
+$rhel8port = ($vagrantsshconfigs | ? {$_.host -like "rhel8"}).port
+$rhel8key = ($vagrantsshconfigs | ? {$_.host -like "rhel8"}).identityfile
+
+foreach ( $sshconfigs in $( $vagrantsshconfigs | ? {$_.host -notlike "rhel8"} ) ) {
+  
+  $keypath = $sshconfigs.identityfile
+
+  $sb = [scriptblock]::create("scp -r -P $rhel8port -o StrictHostKeyChecking=no -i $($rhel8key) $($sshconfigs.identityfile) vagrant@$($rhel8host)://home/vagrant/$($sshconfigs.host).key")
+
+  write-output "invoking: $sb"
+  . $sb
+
+}
+
 ```
