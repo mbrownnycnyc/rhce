@@ -842,3 +842,15 @@ ansible all -m package -a "name={{ vim_editor }} state=present"
 
 # writing in yaml
 
+## understanding the yaml structure
+
+1. access https://jsonformatter.org/yaml-parser
+
+2. review yaml structure
+* make sure you understand indentation
+
+![](2023-06-30-05-15-31.png)
+
+## choosing text editors and IDEs for yaml
+
+1. 
