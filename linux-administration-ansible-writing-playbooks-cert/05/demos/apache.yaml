@@ -1,0 +1,18 @@
+- name: 'Manage Apache Webserver Deployment'
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: 'Install the Apache Webserver'
+      package:
+        name: "{{ apache_pkg }}"
+        state: 'present'
+    - name: 'Ensure web server is running and enabled'
+      service:
+        name: "{{ apache_svc }}"
+        state: 'started'
+        enabled: true
+    - name: 'Copy web content'
+      copy:
+        dest: '/var/www/html/'
+        src:  'web/'

@@ -1,0 +1,7 @@
+- name: mount
+  mount:
+    path: /vdo1
+    fstype: xfs
+    state: mounted
+    src: /dev/mapper/vdo1
+    opts: defaults,x-systemd.requires=vdo.service

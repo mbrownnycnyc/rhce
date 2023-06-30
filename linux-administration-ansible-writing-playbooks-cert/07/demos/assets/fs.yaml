@@ -1,0 +1,4 @@
+- name: format
+  filesystem:
+    type: xfs
+    dev: /dev/mapper/vdo1

@@ -1,0 +1,4 @@
+- name: 'Backup /etc directory on system'
+  archive:
+    path: '/etc/'
+    dest: "/tmp/etc-{{ ansible_hostname }}.tgz"

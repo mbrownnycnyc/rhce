@@ -1,0 +1,6 @@
+- name: install
+  package:
+    name:
+      - vdo
+      - kmod-kvdo
+    state: latest  

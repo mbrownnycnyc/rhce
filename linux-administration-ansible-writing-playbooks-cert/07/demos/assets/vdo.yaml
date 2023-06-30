@@ -1,0 +1,11 @@
+- name: vdo
+  hosts: Redhat
+  become: true
+  gather_facts: false
+  tasks:
+  - include_tasks: install.yaml
+  - include_tasks: service.yaml
+  - include_tasks: createvdo.yaml
+  - include_tasks: fs.yaml
+  - include_tasks: mountpoint.yaml
+  - include_tasks: mount.yaml

@@ -1,5 +1,8 @@
 * https://app.pluralsight.com/course-player?clipId=e6c752e7-eb41-4f71-80e6-6edbdcd275f2
 
+cd ~/vagrant/ansible
+vagrant up --parallel
+
 
 * https://app.pluralsight.com/explore/certifications/topics/linux?trackId=43182a5e-279a-4ef6-808c-c3f62d01ed57&examPrepId=0e4f07d3-5443-4d9c-9331-2a886c87bdb6
 
@@ -612,7 +615,7 @@ $vagrantsshconfigstrs = @()
 $vagrantVMs | % { $vagrantsshconfigstrs += , ( ((vagrant ssh-config $_) -replace "^\s+","" ) | ? { $_.length -gt 0} ) }
 ```
 
-4. because the vagrant-scp has a bug where it doesn't parse Windows filepaths correctly, and because i refuse to use WSL, here's a powershell function that creates an object out of `vagrant ssh-config` output
+2. because the vagrant-scp has a bug where it doesn't parse Windows filepaths correctly, and because i refuse to use WSL, here's a powershell function that creates an object out of `vagrant ssh-config` output, then copies the keys to the `rhel8` VM.
    
 ```
 #capture the vagrant VMs' ssh config
@@ -646,5 +649,196 @@ foreach ( $sshconfigs in $( $vagrantsshconfigs | ? {$_.host -notlike "rhel8"} ) 
   . $sb
 
 }
+```
+
+3. test connection to other VMs from `rhel8`
 
 ```
+vagrant ssh rhel8
+chmod og-rwx stream.key ubuntu.key
+ansible stream --private-key stream.key -u vagrant -m ping
+ansible ubuntu --private-key ubuntu.key -u vagrant -m ping
+```
+
+## establish the `tux` user account
+
+1. create a user account
+```
+ansible stream --private-key stream.key -u vagrant -m user -a "name=tux"
+ansible ubuntu --private-key ubuntu.key -u vagrant -m user -a "name=tux"
+```
+
+2. setup a sudo file
+
+```
+#create the sudo file
+echo "tux ALL=(root) NOPASSWD: ALL" > tux_sudo
+#validate the sudo file
+visudo -cf tux_sudo
+```
+
+3. copy the file
+```
+ansible stream --private-key stream.key -u vagrant -m copy -a "src=tux_sudo dest=/etc/sudoers.d/"
+ansible ubuntu --private-key ubuntu.key -u vagrant -m copy -a "src=tux_sudo dest=/etc/sudoers.d/"
+```
+
+4. generating a key pair
+
+```
+ssh-keygen
+#accept default name
+#don't set a passphrase
+```
+
+5. copy the public key to authed keys on the target systems
+```
+ansible stream --private-key stream.key -u vagrant -m authorized_key -a " user=tux state=present key='{{ lookup('file','/home/vagrant/.ssh/id_rsa.pub') }}' "
+ansible ubuntu --private-key ubuntu.key -u vagrant -m authorized_key -a " user=tux state=present key='{{ lookup('file','/home/vagrant/.ssh/id_rsa.pub') }}' "
+```
+
+7. add the keys to use with auth to the ~/.ansible.cfg
+
+```
+# add `private_key_file = ~/.ssh/id_rsa` to the ansible.cfg
+[vagrant@rhel8 ~]$ cat ~/.ansible.cfg
+[defaults]
+inventory = inventory
+remote_user = tux
+private_key_file = ~/.ssh/id_rsa
+
+[privilege_escalation]
+become = true
+```
+
+8. test connectivity
+```
+[vagrant@rhel8 ~]$ ansible all -m ping
+192.168.33.11 | SUCCESS => {
+    "ansible_facts": {
+        "discovered_interpreter_python": "/usr/libexec/platform-python"
+    },
+    "changed": false,
+    "ping": "pong"
+}
+192.168.33.12 | SUCCESS => {
+    "ansible_facts": {
+        "discovered_interpreter_python": "/usr/libexec/platform-python"
+    },
+    "changed": false,
+    "ping": "pong"
+}
+192.168.33.13 | SUCCESS => {
+    "ansible_facts": {
+        "discovered_interpreter_python": "/usr/bin/python3"
+    },
+    "changed": false,
+    "ping": "pong"
+}
+```
+
+## using variables
+
+* `-m` specifies the python module to use
+* challenge: resolve different pacakge names for different distros
+  * package manager of target systems is irrelevant thanks to the `package` module.
+  * use a group_var to store a variable, and then use a jinja variable during an invocation
+
+1. review documentation
+```
+ansible-doc package
+#then search for EXAMPLE
+```
+   
+2. the package `tree` is the same...
+```
+ansible all -m package -a "name=tree state=present"
+```
+
+3. but `vim` is different between rhel and ubuntu
+
+```
+#review the group structure in the inventory, noting the groups `Redhat` and `ubuntu`
+[vagrant@rhel8 ~]$ ansible-inventory --list -vvv
+ansible-inventory 2.9.27
+  config file = /home/vagrant/.ansible.cfg
+  configured module search path = ['/home/vagrant/.ansible/plugins/modules', '/usr/share/ansible/plugins/modules']
+  ansible python module location = /usr/lib/python3.6/site-packages/ansible
+  executable location = /usr/bin/ansible-inventory
+  python version = 3.6.8 (default, Jun 14 2022, 09:19:35) [GCC 8.5.0 20210514 (Red Hat 8.5.0-13)]
+Using /home/vagrant/.ansible.cfg as config file
+host_list declined parsing /home/vagrant/inventory as it did not pass its verify_file() method
+script declined parsing /home/vagrant/inventory as it did not pass its verify_file() method
+auto declined parsing /home/vagrant/inventory as it did not pass its verify_file() method
+Parsed /home/vagrant/inventory inventory source with ini plugin
+{
+    "Redhat": {
+        "children": [
+            "rhel",
+            "stream"
+        ]
+    },
+    "_meta": {
+        "hostvars": {
+            "192.168.33.11": {
+                "ansible_connection": "local",
+                "vim_editor": "vim-enhanced"
+            },
+            "192.168.33.12": {
+                "vim_editor": "vim-enhanced"
+            },
+            "192.168.33.13": {
+                "vim_editor": "vim"
+            }
+        }
+    },
+    "all": {
+        "children": [
+            "Redhat",
+            "ubuntu",
+            "ungrouped"
+        ]
+    },
+    "rhel": {
+        "hosts": [
+            "192.168.33.11"
+        ]
+    },
+    "stream": {
+        "hosts": [
+            "192.168.33.12"
+        ]
+    },
+    "ubuntu": {
+        "hosts": [
+            "192.168.33.13"
+        ]
+    }
+}
+
+#create relevant `group_vars` files
+mkdir ~/group_vars/
+echo "vim_editor: vim-enhanced"  >> ~/group_vars/Redhat
+echo "vim_editor: vim" >> ~/group_vars/ubuntu
+
+#review how the `group_vars` applies at runtime to both systems, because of their group scope
+[vagrant@rhel8 ~]$ ansible-inventory --host stream
+{
+    "vim_editor": "vim-enhanced"
+}
+[vagrant@rhel8 ~]$ ansible-inventory --host ubuntu
+{
+    "vim_editor": "vim"
+}
+
+# remove the package by using the jinja group_var
+ansible all -m package -a "name={{ vim_editor }} state=absent"
+
+# (re)add the package by using the jinja group_var
+ansible all -m package -a "name={{ vim_editor }} state=present"
+```
+
+# Linux Administration with Ansible: Writing Ansible Playbooks
+
+# writing in yaml
+

@@ -1,0 +1,5 @@
+- name: start
+  service:
+    name: vdo
+    state: started
+    enabled: true

@@ -1,0 +1,6 @@
+- name: create 
+  vdo:
+    name: vdo1
+    state: present
+    device: /dev/sdb
+    logicalsize: 20G
