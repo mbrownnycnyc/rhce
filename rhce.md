@@ -1,4 +1,4 @@
-* https://app.pluralsight.com/course-player?clipId=e6c752e7-eb41-4f71-80e6-6edbdcd275f2
+* https://app.pluralsight.com/course-player?clipId=d50b1719-6b08-4026-83bc-3b4bd38b7772
 
 cd ~/vagrant/ansible
 vagrant up --parallel
@@ -853,4 +853,169 @@ ansible all -m package -a "name={{ vim_editor }} state=present"
 
 ## choosing text editors and IDEs for yaml
 
-1. 
+1. note that you should use spaces, not tabs
+
+2. for vim, you can use the following in `~/.vimrc`
+* https://vimhelp.org/options.txt.html
+* I really don't like `cursorcolumn` and `cursorline`
+```
+set number
+set autoindent
+set expandtab
+set tabstop=2
+set shiftwidth=2
+```
+
+
+## understanding playbooks
+
+1. create a playbook, with a play, with a task
+```
+mkdir -p ~/ansible/simple && cd ~/ansible/simple
+vim firstplay.yaml
+- name: first play
+  hosts: all
+  become: true
+  tasks:
+    - name: first task
+      package:
+        name: tree
+        state: present
+```
+
+2. install a linter, and then lint
+```
+sudo dnf -y install python3-devel
+pip3 install ansible-lint --user
+ansible-lint -v firstplay.yaml
+```
+
+3. check syntax
+```
+#returns nothing means no errors 
+ansible-playbook --syntax-check firstplay.yaml
+```
+
+4. perform a whatif (no operations)
+```
+sudo yum -y remove tree
+#returns nothing means no errors 
+ansible-playbook -C -v firstplay.yaml
+```
+
+5. execute the playbook
+
+```
+ansible-playbook firstplay.yaml
+```
+
+## using variables and debugging playbooks
+
+* facts are OS relevant information
+
+1. active enable facts gathering in the playbook
+```
+#at the play level, add "gather_facts: true"
+- name: first play
+  hosts: all
+  become: true
+  gather_facts: true
+```
+   
+2. add another task to the playbook
+* `ansible_os_family` is a fact
+```
+    - name: print progress
+      debug:
+        msg: "this is {{ ansible_os_family }}"
+```
+
+3. note that when you execute tasks, that each task's status/output is sent to stdout:
+* note the `TASK [print progress]`
+
+```
+[vagrant@rhel8 simple]$ ansible-playbook firstplay.yaml
+
+PLAY [first play] ************************************************************************************************************************************************************************************
+TASK [Gathering Facts] *******************************************************************************************************************************************************************************ok: [192.168.33.11]
+ok: [192.168.33.12]
+ok: [192.168.33.13]
+
+TASK [first task] ************************************************************************************************************************************************************************************ok: [192.168.33.13]
+ok: [192.168.33.12]
+ok: [192.168.33.11]
+
+TASK [print progress] ********************************************************************************************************************************************************************************ok: [192.168.33.13] => {
+    "msg": "this is Debian"
+}
+ok: [192.168.33.12] => {
+    "msg": "this is RedHat"
+}
+ok: [192.168.33.11] => {
+    "msg": "this is RedHat"
+}
+
+PLAY RECAP *******************************************************************************************************************************************************************************************192.168.33.11              : ok=3    changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+192.168.33.12              : ok=3    changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+192.168.33.13              : ok=3    changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+```
+
+## locate python/ansible modules
+
+1. find a module
+
+```
+[vagrant@rhel8 simple]$ find /usr/lib -name package.py | egrep package
+/usr/lib/python3.6/site-packages/dnf/package.py
+/usr/lib/python3.6/site-packages/ansible/modules/packaging/os/package.py <-------
+/usr/lib/python3.6/site-packages/ansible/plugins/action/package.py
+[vagrant@rhel8 simple]$ find /usr/lib -name debug.py | egrep debug
+/usr/lib/python3.6/site-packages/dnf-plugins/debug.py
+/usr/lib/python3.6/site-packages/jinja2/debug.py
+/usr/lib/python3.6/site-packages/ansible/modules/utilities/logic/debug.py <-------
+/usr/lib/python3.6/site-packages/ansible/plugins/action/debug.py
+/usr/lib/python3.6/site-packages/ansible/plugins/callback/debug.py
+/usr/lib/python3.6/site-packages/ansible/plugins/strategy/debug.py
+```
+
+## scripting linux administration
+
+* note that we've already performed provisioning of the VMs using the below playbook below in the first module.
+
+* create a user account with the `user` module
+* use the `copy` module to set content on a file
+* edit a single line in the sshd_config with the `lineinfile` module, leveraging the `notify` module
+* a `handler` is the target of the `notify` call
+
+1. review the playbook
+```
+- name: Deploy Systems
+  hosts: all
+  become: true
+  tasks:
+    - name: Create_user
+      user:
+        state: present
+        shell: /bin/bash
+        name: tux
+        password: "{{ 'Password1' | password_hash('sha512') }}"
+        update_password: on_create
+    - name: sudo
+      copy:
+        dest: /etc/sudoers.d/tux
+        content: "tux ALL=(root) NOPASSWD: ALL"
+    - name: edit_sshd
+      lineinfile:
+        path: /etc/ssh/sshd_config
+        regexp: '^PasswordAuthentication'
+        line: 'PasswordAuthentication yes'
+        insertafter: '^#PasswordAuthentication'
+      notify: restart_sshd
+  handlers:
+    - name: restart_sshd
+      service:
+        name: sshd
+        state: restarted
+```
+
+## using shell commands in playbook
