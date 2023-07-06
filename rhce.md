@@ -978,7 +978,7 @@ PLAY RECAP *********************************************************************
 /usr/lib/python3.6/site-packages/ansible/plugins/strategy/debug.py
 ```
 
-## scripting linux administration
+# scripting linux administration
 
 * note that we've already performed provisioning of the VMs using the below playbook below in the first module.
 
@@ -1018,4 +1018,85 @@ PLAY RECAP *********************************************************************
         state: restarted
 ```
 
-## using shell commands in playbook
+# using shell commands in playbook
+
+* running shell commands when moduels not available:
+  * `shell`
+  * `command`
+  * `raw`
+  * `script`
+  * `win_comment`
+
+## command versus shell modules
+
+* `command`: execution of native linux command without the need of creating a parent shell.
+* `shell`: opens a shell `/bin/sh` to execute the commands.  Allows for variables and stream operators (considered less secure).
+
+### security:
+```
+[vagrant@rhel8 ~]$ MYVAR='myval;ls -l /etc/hosts'
+[vagrant@rhel8 ~]$ ansible rhel -m command -a "echo $MYVAR"
+192.168.33.11 | CHANGED | rc=0 >>
+myval;ls -l /etc/hosts
+
+[vagrant@rhel8 ~]$ ansible rhel -m shell -a "echo $MYVAR"
+192.168.33.11 | CHANGED | rc=0 >>
+myval
+-rw-r--r--. 1 root root 188 Mar 30 00:24 /etc/hosts
+```
+
+* note that this is risky
+
+## working with the ansible raw module
+* in cases where python isn't installed
+```
+ansible all -i 18.172.45.3 -b -m raw -a "dnf install -y python"
+```
+
+## executing scripts withing the script module
+* execute a script on controller and have it script on inventory
+
+```
+cat << EOF | tee script.sh
+#!/bin/sh
+echo "hello world"
+EOF
+ansible all -m script -a  "/home/vagrant/script.sh"
+```
+
+## idempotentcy with creates
+```
+mkdir -p ~/ansible/loop; cd ~/ansible/loop
+cat << EOF | tee loopdevice.yaml
+- name: 'manage disk file'
+  hosts: rhel
+  become: true
+  gather_facts: false
+  tasks:
+  - name: "create disk file"
+    command:
+      cmd: 'fallocate -l 1G /root/disk0'
+      creates: '/root/disk0' #this is a meta parameter... this tells ansible that this task will CREATE this file... so if the file exists... the task won't be run again
+EOF
+[vagrant@rhel8 loop]$ ansible-playbook loopdevice.yaml
+
+PLAY [manage disk file] ******************************************************************************************************************************************************************************
+
+TASK [create disk file] ******************************************************************************************************************************************************************************
+changed: [192.168.33.11]
+
+PLAY RECAP *******************************************************************************************************************************************************************************************
+192.168.33.11              : ok=1    changed=1    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+
+[vagrant@rhel8 loop]$ ansible-playbook loopdevice.yaml
+
+PLAY [manage disk file] ******************************************************************************************************************************************************************************
+
+TASK [create disk file] ******************************************************************************************************************************************************************************
+ok: [192.168.33.11]
+
+PLAY RECAP *******************************************************************************************************************************************************************************************
+192.168.33.11              : ok=1    changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+```
+
+## using playbook/global vars
