@@ -1100,3 +1100,639 @@ PLAY RECAP *********************************************************************
 ```
 
 ## using playbook/global vars
+1. Create a file with global vars, and also leverages create
+
+```
+mkdir ~/ansible/loop
+cat << EOF | tee loopdevice.yaml
+- name: 'Manage Disk File'
+  hosts: all
+  gather_facts: false
+  vars:
+    disk_file: '/root/disk0'
+    loop_dev: '/dev/loop100'
+  tasks:
+    - name: 'Create raw disk file'
+      command:
+        cmd: "fallocate -l 1G {{ disk_file }}"
+        creates: "{{ disk_file }}"
+    - name: 'Create loop device'
+      command:
+        cmd: "losetup {{ loop_dev }} {{ disk_file }}"
+        creates: "{{ loop_dev }}"
+    - name: 'Create XFS FS'
+      filesystem:
+        fstype: xfs
+        dev: "{{ loop_dev }}"
+EOF
+```
+
+2. running with creates:
+
+```
+[vagrant@rhel8 loop]$ ansible-playbook loopdevice.yaml
+
+PLAY [Manage Disk File] ******************************************************************************************************************************************************************************
+
+TASK [Create raw disk file] **************************************************************************************************************************************************************************
+ok: [192.168.33.11]
+changed: [192.168.33.12]
+changed: [192.168.33.13]
+
+TASK [Create loop device] ****************************************************************************************************************************************************************************
+changed: [192.168.33.13]
+changed: [192.168.33.11]
+changed: [192.168.33.12]
+
+TASK [Create XFS FS] *********************************************************************************************************************************************************************************
+changed: [192.168.33.11]
+changed: [192.168.33.13]
+changed: [192.168.33.12]
+
+PLAY RECAP *******************************************************************************************************************************************************************************************
+192.168.33.11              : ok=3    changed=2    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+192.168.33.12              : ok=3    changed=3    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+192.168.33.13              : ok=3    changed=3    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+
+[vagrant@rhel8 loop]$ ansible-playbook loopdevice.yaml
+
+PLAY [Manage Disk File] ******************************************************************************************************************************************************************************
+
+TASK [Create raw disk file] **************************************************************************************************************************************************************************
+ok: [192.168.33.13]
+ok: [192.168.33.11]
+ok: [192.168.33.12]
+
+TASK [Create loop device] ****************************************************************************************************************************************************************************
+ok: [192.168.33.13]
+ok: [192.168.33.11]
+ok: [192.168.33.12]
+
+TASK [Create XFS FS] *********************************************************************************************************************************************************************************
+ok: [192.168.33.13]
+ok: [192.168.33.11]
+ok: [192.168.33.12]
+
+PLAY RECAP *******************************************************************************************************************************************************************************************
+192.168.33.11              : ok=3    changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+192.168.33.12              : ok=3    changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+192.168.33.13              : ok=3    changed=0    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+```
+
+## Windows commands with win_command
+1. install `ansible.windows`
+
+```
+ansible-galaxy collection install ansible.windows
+```
+
+2. create a playbook that executes a `whoami`
+```
+- name: execute whoami
+  win_command: whoami
+```
+
+# working with the big three
+
+## what are the big three
+* three items used to manage an OS instance
+  * packages
+  * files
+  * services
+
+## review the inventory
+
+### listing inventory
+
+```
+[vagrant@rhel8 ~]$ cat inventory
+[rhel]
+192.168.33.11
+[stream]
+192.168.33.12
+[ubuntu]
+192.168.33.13
+[Redhat:children]
+stream
+rhel
+```
+
+2. validating inventory on each host
+```
+[vagrant@rhel8 ~]$ ansible all -m debug -a 'var=groups.keys()'
+192.168.33.13 | SUCCESS => {
+    "groups.keys()": "dict_keys(['all', 'ungrouped', 'rhel', 'stream', 'ubuntu', 'Redhat'])"
+}
+192.168.33.12 | SUCCESS => {
+    "groups.keys()": "dict_keys(['all', 'ungrouped', 'rhel', 'stream', 'ubuntu', 'Redhat'])"
+}
+192.168.33.11 | SUCCESS => {
+    "groups.keys()": "dict_keys(['all', 'ungrouped', 'rhel', 'stream', 'ubuntu', 'Redhat'])"
+
+```
+
+
+### listing membership
+
+```
+[vagrant@rhel8 ~]$ ansible-inventory --graph
+@all:
+  |--@Redhat:
+  |  |--@rhel:
+  |  |  |--192.168.33.11
+  |  |--@stream:
+  |  |  |--192.168.33.12
+  |--@ubuntu:
+  |  |--192.168.33.13
+  |--@ungrouped:
+```
+
+## managing statis service and packages
+
+1. install httpd
+
+* version 1:
+```
+cat << EOF | tee apache.yaml
+- name: 'Manage Apache Webserver Deployment'
+  hosts: Redhat
+  become: true
+  gather_facts: false
+  tasks:
+    - name: 'Install the Apache Webserver'
+      package:
+        name: "httpd"
+        state: 'present'
+    - name: 'Ensure web server is running and enabled'
+      service:
+        name: "httpd"
+        state: 'started'
+        enabled: true
+EOF
+```
+
+2. add content to web page by adding a new task
+```
+cat << EOF | tee apache.yaml
+- name: 'Manage Apache Webserver Deployment'
+  hosts: Redhat
+  become: true
+  gather_facts: false
+  tasks:
+    - name: 'Install the Apache Webserver'
+      package:
+        name: "httpd"
+        state: 'present'
+    - name: 'Ensure web server is running and enabled'
+      service:
+        name: "httpd"
+        state: 'started'
+        enabled: true
+    - name: 'Copy web content'
+      copy:
+        dest: '/var/www/html/index.html'
+        content:  'this is a simple webserver'
+EOF
+```
+
+3. add content using the `|`
+```
+cat << EOF | tee apache.yaml
+- name: 'Manage Apache Webserver Deployment'
+  hosts: Redhat
+  become: true
+  gather_facts: false
+  tasks:
+    - name: 'Install the Apache Webserver'
+      package:
+        name: "httpd"
+        state: 'present'
+    - name: 'Ensure web server is running and enabled'
+      service:
+        name: "httpd"
+        state: 'started'
+        enabled: true
+    - name: 'Copy web content'
+      copy:
+        dest: '/var/www/html/index.html'
+        content: |
+          this is a simple webserver
+          <h1>welcome</h1>
+EOF
+```
+
+4. copy a file with copy module's "src" parameter
+```
+cat << EOF | tee apache.yaml
+- name: 'Manage Apache Webserver Deployment'
+  hosts: Redhat
+  become: true
+  gather_facts: false
+  tasks:
+    - name: 'Install the Apache Webserver'
+      package:
+        name: "httpd"
+        state: 'present'
+    - name: 'Ensure web server is running and enabled'
+      service:
+        name: "httpd"
+        state: 'started'
+        enabled: true
+    - name: 'Copy web content'
+      copy:
+        dest: '/var/www/html/index.html'
+        src: index.html
+EOF
+```
+
+5. copy a directory with copy module's "src" parameter
+```
+cat << EOF | tee apache.yaml
+- name: 'Manage Apache Webserver Deployment'
+  hosts: Redhat
+  become: true
+  gather_facts: false
+  tasks:
+    - name: 'Install the Apache Webserver'
+      package:
+        name: "httpd"
+        state: 'present'
+    - name: 'Ensure web server is running and enabled'
+      service:
+        name: "httpd"
+        state: 'started'
+        enabled: true
+    - name: 'Copy web content'
+      copy:
+        dest: '/var/www/html/'
+        src: 'web/'
+EOF
+```
+
+## copy across multiple system types focusing on group_vars
+
+* group_vars tell ansible to use different values for variables per group.
+* * the `group_vars` directory exists 
+
+1. establish the structure for `group_vars`
+```
+mkdir ~/group_vars
+
+cat << EOF | tee ~/group_vars/Redhat 
+apache_pkg: httpd
+apache_src: httpd
+EOF
+
+cat << EOF | tee ~/group_vars/ubuntu
+apache_pkg: apache2
+apache_src: apache2
+EOF
+```
+
+2. deploy using the group_var
+```
+cat << EOF | tee ~/apache.yaml
+- name: 'Manage Apache Webserver Deployment'
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: 'Install the Apache Webserver'
+      package:
+        name: "{{ apache_pkg }}"
+        state: 'present'
+    - name: 'Ensure web server is running and enabled'
+      service:
+        name: "{{ apache_svc }}"
+        state: 'started'
+        enabled: true
+    - name: 'Copy web content'
+      copy:
+        dest: '/var/www/html/'
+        src:  'web/'
+EOF
+```
+
+## managing chrony time server
+
+1. create a simplified chrony config that will be distributed
+```
+mkdir ~/ansible/chrony
+grep -Ev '^($|#)' /etc/chrony.conf > ~/chrony/chrony.conf
+```
+
+2. set up group_vars
+```
+echo 'chrony_conf: /etc/chrony.conf' >> ~/group_vars/Redhat
+echo 'chrony_svc: chronyd' >> ~/group_vars/Redhat
+echo 'chrony_conf: /etc/chrony/chrony.conf' >> ~/group_vars/ubuntu
+echo 'chrony_svc: chrony' >> ~/group_vars/ubuntu
+```
+
+## using Handlers
+* handlers will only run when called upon by another element within the task (when they are notified)
+  * example: restart chrony once a conf is placed
+
+```
+tasks:
+  - name: "chrony conf"
+    src: 'chrony.conf'
+    dest: "{{ chrony_conf }}"
+  notify: restart_chrony
+
+handlers:
+- name: 'restart_chrony'
+  service:
+    name: "{{ chrony_svc }}"
+    state: 'restarted'
+```
+
+## create the chrony playbook
+
+* this is a good example of `group_vars`, use of `handlers`, and the following modules: `package`, `service`, `copy`
+
+1. create the yaml
+* note that the copy module's src is an absolute path used at runtime
+  * the searched paths are on the ansible Controller and are relevative to the directory where the playbook is located:
+    * ~/chrony/files/ansible/chrony/chrony.conf <-- this is the usual convention
+    * ~/chrony/ansible/chrony/chrony.conf
+```
+mkdir ~/chrony/
+cat << EOF | tee ~/chrony/chrony.yaml
+- name: 'Manage the chrony timeserver'
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: 'Ensure that chrony time server is installed'
+      package:
+        name: 'chrony'
+        state: 'present'
+    - name: 'Ensure chrony time server is enabled and running'
+      service:
+        name: "{{ chrony_svc }}"
+        state: 'started'
+        enabled: true
+    - name: 'Copy standard config file for chrony time server'
+      copy:
+        dest: "{{ chrony_conf }}"
+        src: '~/ansible/chrony/chrony.conf'
+      notify: 'restart_chrony'
+  handlers:
+    - name: 'restart_chrony'
+      service:
+        name: "{{ chrony_svc }}"
+        state: 'restarted'
+EOF
+```
+
+2. execute
+
+```
+# check the deployment without affecting anything
+ansible-playbook ~/chrony/chrony.yaml -C
+
+# then actually execute
+ansible-playbook ~/chrony/chrony.yaml
+```
+
+# managing users in ansible
+
+## creating users
+
+1. create a simple playbook using the `user` module
+
+```
+mkdir ~/ansible/user; cd ~/ansible/user
+cat << EOF | tee user.yaml
+- name: manage users
+  hosts: all
+  become: true
+  gather_facts: flase
+  tasks:
+    - name: manage user
+      user:
+        name: ansible
+        state: present
+        shell: /bin/bash
+EOF
+ansible-playbook user.yaml
+```
+
+2. there are also variables that can be used... and you can provide a default value using the jinja2 templating function `default()`:
+
+```
+cat << EOF | tee user.yaml
+- name: manage users
+  hosts: all
+  become: true
+  gather_facts: flase
+  tasks:
+    - name: manage user
+      user:
+        name: "{{ user_account | default('ansible') }}"
+        state: present
+        shell: /bin/bash
+EOF
+
+#you can invoke this and provide the extra vars with:
+ansible-playbook --extra-vars user_account=mary user.yaml
+```
+
+3. leveraging the `when` parameter and understanding the `user` module's `state` and `remove` parameters:
+* `remove` will delete homedir as well
+```
+cat << EOF | tee user.yaml
+- name: manage users
+  hosts: all
+  become: true
+  gather_facts: flase
+  tasks:
+    - name: create user
+      user:
+        name: "{{ user_account | default('ansible') }}"
+        state: present
+        shell: /bin/bash
+      when: user_create == 'yes'
+    - name: delete user
+      user:
+        name: "{{ user_account | default('ansible') }}"
+        state: absent
+        remove: true
+      when: user_create == 'no'
+EOF
+```
+
+4. understand verbosity:
+
+```
+ansible-playbook --extra-vars user_account=mary --extra-vars user_create=yes user.yaml -vvv
+#provides a lot of info
+```
+
+5. remove users:
+```
+#remove mary
+ansible-playbook --extra-vars user_account=mary --extra-vars user_create=no user.yaml
+
+#remove ansible, leveraging the filter that calls default()
+ansible-playbook --extra-vars user_create=no user.yaml
+
+#create ansible, leveraging the filter that calls default()
+ansible-playbook --extra-vars user_create=yes user.yaml
+```
+
+## managing user passwords
+
+* learn more about the `user` module's `password` and `update_password` parameters
+
+1. create playbook
+
+```
+cd ~/ansible/user
+cat << EOF | tee user.yaml
+- name: manage users
+  hosts: all
+  become: true
+  gather_facts: flase
+  tasks:
+    - name: create user
+      user:
+        name: "{{ user_account | default('ansible') }}"
+        state: present
+        shell: /bin/bash
+        password: "{{ 'Password1' | password_hash('sha512') }}"
+        update_password: on_create
+      when: user_create == 'yes'
+    - name: delete user
+      user:
+        name: "{{ user_account | default('ansible') }}"
+        state: absent
+        remove: true
+      when: user_create == 'no'
+EOF
+```
+
+## managing user auth keys
+
+1. create a playbook and review the `user` module's parameters: `generate_ssh_key`, `ssh_key_type`, `ssh_key_file`
+
+* note the use of `hosts: 'rhel'`
+  * this will generate the key pair within `~/.ssh/` of vagrant
+```
+cd ~/ansible/user
+cat << EOF | tee localuser.yaml
+- name: 'Manage Local Account'
+  hosts: 'rhel'
+  become: true
+  gather_facts: false
+  tasks:
+    - name: 'Manage User Account'
+      user:
+        name: '{{ user_account }}'
+        state: 'present'
+        generate_ssh_key: true
+        ssh_key_type: 'ecdsa'
+        ssh_key_file: '.ssh/id_ecdsa'
+EOF
+
+ansible-playbook localuser.yaml --extra-var user_account=$USER
+
+#validate that the keys were generated
+ll /home/vagrant/.ssh/id_ecdsa.pub
+```
+
+## authenticate with new key pair
+
+1. use the `authorized_key` module to copy across a key
+
+```
+#insert a new task in user.yaml
+- name: ssh auth to remote acct
+  authorized_key:
+    user: "{{ user_account | default('ansible') }}"
+    state: present
+    manage_dir: true
+    key: "{{ lookup('file', '/home/vagrant/.ssh/id_ecdsa.pub') }}
+  when: user_create == 'yes'
+```
+
+2. run
+```
+ansible-playbook user.yaml --extra-vars user_create=yes 
+```
+
+3. test auth with the key:
+```
+ssh -i ~/.ssh/id_ecdsa ansible@192.168.33.13
+```
+
+## using blocks and pushing a sudoers file to targets
+
+* you can use blocks to designate conditionals across many tasks
+
+1. generate the playbook
+
+* note that the plays are targetting different hosts
+
+```
+cd ~/ansible/user
+cat << EOF | tee user.yaml
+- name: 'Manage Local Account'
+  hosts: 'rhel'
+  become: true
+  gather_facts: false
+  tasks:
+    - name: 'Manage User Account'
+      user:
+        name: 'vagrant'
+        state: 'present'
+        generate_ssh_key: true
+        ssh_key_type: 'ecdsa'
+        ssh_key_file: '.ssh/id_ecdsa'
+
+- name: 'Create and Manage Remote Ansible User'
+  hosts: all
+  become: true
+  gather_facts: false
+  tasks:
+    - name: 'Create User Account, SSH Auth and Sudoers Entry'
+      block:
+        - name: 'Create Ansible User'
+          user:
+            name: 'ansible'
+            state: 'present'
+            shell: '/bin/bash'
+            password: "{{ 'Password1' | password_hash('sha512') }}"
+            update_password: 'on_create'       
+        - name: 'Allow SSH Authentication via key for vagrant account to new remote account'
+          authorized_key:
+            user: 'ansible'
+            state: 'present'
+            manage_dir: true
+            key: "{{ lookup('file', '/home/vagrant/.ssh/id_ecdsa.pub') }}"
+        - name: 'Copy Sudoers file' 
+          copy:
+            dest: '/etc/sudoers.d/ansible'
+            content: 'ansible ALL=(root) NOPASSWD: ALL'
+      when: user_create == 'yes'        
+    - name: 'Delete User Account'
+      user:
+        name: 'ansible'
+        state: 'absent'
+        remove: true
+      when: user_create == 'no'
+EOF
+```
+
+2. validate:
+
+```
+ansible-playbook --extra-vars user_create=yes user.yaml -C
+```
+
+3. run
+
+```
+ansible-playbook --extra-vars user_create=yes user.yaml -C
+```
