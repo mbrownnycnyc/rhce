@@ -1,4 +1,5 @@
-* https://app.pluralsight.com/course-player?clipId=d50b1719-6b08-4026-83bc-3b4bd38b7772
+* https://app.pluralsight.com/course-player?clipId=89c8a865-1f08-40f6-92d9-0e905e152405
+
 
 cd ~/vagrant/ansible
 vagrant up --parallel
@@ -604,7 +605,7 @@ sudo nmap -Pn -p22 -n 192.168.33.0/24 --oG - | awk '/22\/open/ { print $2 }' > ~
 5. adjust ansible.cfg to use private key
 
 
-## place private keys on the controller system
+## place private keys for inventory hosts on the controller system
 
 1. locate the current keys that vagrant client uses
 ```
@@ -1736,3 +1737,494 @@ ansible-playbook --extra-vars user_create=yes user.yaml -C
 ```
 ansible-playbook --extra-vars user_create=yes user.yaml -C
 ```
+
+# ancillary ansible playbooks
+
+## archiving files
+
+1. archiving files
+```
+- name compress archvive of /etc
+  archive:
+    path: /etc
+    dest: "/tmp/etc-{{ ansible_hostname }}.tgz"
+```
+
+## importing tasks
+* dynamic (include): can define vars
+```
+- name: manage server backup
+  hosts: all
+  become: true
+  gather_facts: true
+  tasks:
+  - include_tasks: backup.yaml
+```
+
+* static (import): just runs tasks (no import of vars)
+
+## lab: create parent play, import children, understand scopes
+
+1. Create env
+
+```
+#on rhel8 VM
+cd ~/ansible
+mkdir extra
+```
+
+2. create backup.yaml
+
+* create just the task
+```
+cat << EOF | tee backup.yaml
+- name: 'Backup /etc directory on system'
+  archive:
+    path: '/etc/'
+    dest: "/tmp/etc-{{ ansible_hostname }}.tgz"
+EOF
+```
+
+3. create archive.yaml with include_tasks
+* create the (parent) playbook
+```
+cat << EOF | tee archive.yaml
+- name: 'Backup and schedule backups'
+  hosts: 'all'
+  become: true
+  gather_facts: true
+  tasks:
+  - include_tasks: backup.yaml
+EOF
+```
+
+4. run the playbook and validate success
+```
+ansible-playbook archive.yaml
+
+[vagrant@rhel8 extra]$ ansible-playbook archive.yaml
+<snip>
+
+TASK [include_tasks] *********************************************************************************************************************************************************************************
+included: /home/vagrant/ansible/extra/backup.yaml for 192.168.33.13, 192.168.33.12, 192.168.33.11
+<snip>
+[vagrant@rhel8 extra]$ ls /tmp/etc*
+/tmp/etc-rhel8.tgz
+```
+
+* NOTE: `import_tasks` simply adds the tasks to the playbook (similarly to just copy and pasting the tasks into the parent playbook)
+
+5. create `schedule.yaml`
+```
+cat << EOF | tee schedule.yaml
+- name: 'Scheduled backup of /etc'
+  ansible.builtin.cron:
+    name: 'backup /etc'
+    weekday: '5'
+    minute: '0'
+    hour: '2'
+    user: 'root'
+    job: "tar -czf /tmp/etc-{{ ansible_hostname }}.tgz /etc"
+    cron_file: etc_backup
+EOF
+```
+
+6. include_tasks the `schedule.yaml` into the playbook archive.yaml
+```
+vim archive.yaml
+#add the following line to the end
+  - include_tasks: schedule.yaml
+```
+
+7. validate cron schedule
+```
+[vagrant@rhel8 extra]$ sudo cat /etc/cron.d/etc_backup
+#Ansible: backup /etc
+0 2 * * 5 root tar -czf /tmp/etc-rhel8.tgz /etc
+```
+
+## managing VDO storage
+* this example will create multiple tasks and group them together in a playbook
+
+### what is VDO?
+* virtual data optimizer: available on RHEL and centos
+  * VDO is a logical abstraction (API) of file systems
+
+### letsss gooooo
+
+* note that you must create a block device of 8GB as /dev/sdb, update the kernel, and reboot system.  I don't cover this, but will later.
+
+1. install VDO to targets
+```
+cat << EOF | tee install.yaml
+- name: install
+  package:
+    name:
+      - vdo
+      - kmod-kvdo
+    state: latest  
+EOF
+```
+
+2. start the vdo service
+```
+cat << EOF | tee service.yaml
+- name: start
+  service:
+    name: vdo
+    state: started
+    enabled: true
+EOF
+```
+
+3. create the vdo device
+```
+cat << EOF | tee createvdo.yaml
+- name: create 
+  vdo:
+    name: vdo1
+    state: present
+    device: /dev/sdb
+    logicalsize: 20G
+```
+
+4. create a file system in VDO
+```
+cat << EOF | tee fs.yaml
+- name: format
+  filesystem:
+    type: xfs
+    dev: /dev/mapper/vdo1
+EOF
+```
+
+5. create the mountpoint dir
+```
+cat << EOF | tee mountpoint.yaml
+- name: mountpoint
+  file:
+    path: /vdo1
+    state: directory
+EOF
+```
+
+6. mount the file system
+```
+cat << EOF | tee mount.yaml
+- name: mount
+  mount:
+    path: /vdo1
+    fstype: xfs
+    state: mounted
+    src: /dev/mapper/vdo1
+    opts: defaults,x-systemd.requires=vdo.service
+EOF
+```
+
+7. create playbook with include_tasks
+```
+cat << EOF | tee vdo.yaml
+- name: vdo
+  hosts: Redhat
+  become: true
+  gather_facts: false
+  tasks:
+  - include_tasks: install.yaml
+  - include_tasks: service.yaml
+  - include_tasks: createvdo.yaml
+  - include_tasks: fs.yaml
+  - include_tasks: mountpoint.yaml
+  - include_tasks: mount.yaml
+EOF
+```
+
+8. validate mounts
+```
+mount -t XFS
+```
+
+## importing playbooks
+
+1. create a playbook that calls other playbooks
+
+```
+cat << EOF | tee p1.yaml
+- import_playbook: archive.yaml
+- import_playbook: vdo.yaml
+EOF
+```
+
+2. execute
+```
+ansible-playbook p1.yaml
+```
+
+# jinja2 templating with ansible
+
+* review template concepts
+* variables
+* filters
+* if conditional
+* for loops
+
+## intro to templating
+
+* a template is a basis
+* data is loaded to a template
+* jinja2 templating is used by ansible for templating
+  * jinja2 templating is agnostic to context
+
+### jinja2 template delimiters
+
+1. loops and conditionals
+```
+{% for vhost in apache_vhosts %}
+```
+
+2. variables
+```
+{{ vhost.servername }}
+```
+
+3. comments
+```
+{# this is a comment #}
+```
+
+## ansible template module
+
+* template module will generate dynamic configurations and then copy them to the target inventory hosts.
+* templating occurs on the ansible controller, not on the target host.
+* note that it is similar to the copy module, but it uses templating.
+
+1. example of using templating module
+
+* note that when no path is applied, templates can be stored either in the playbook directory, or a subdirectory of the playbook called `template`.
+```
+- name: template mariadb config file
+  template:
+    src: mariadb_conf.j2
+    dest: /etc/my.cnf
+    mode: 0664
+    owner: root
+    group: root
+    force: yes
+    backup: yes
+```
+
+2. ansible can run a validation on the ansible controller before copying the file to the dest:
+
+```
+- name: validate new sudoers with visudo, then copy
+  src: sudoers
+  dest: /etc/sudoers
+  validate: /usr/sbin/visudo -cf %s
+  backup: yes
+```
+
+3. you can use a loop to generate and copy multiple templates:
+
+```
+- name: copy multiple templated files
+  template:
+    src: "{{ item.src }}"
+    dest: "{{ item.dst }}"
+  loop:
+    - { src: 'templates/myapp_cfg.j2}, dest: '/home/joe/myapp.cfg' }
+    - { src: 'templates/index.html.j2}, dest: '/var/www/index.html' }
+    - { src: 'templates/config_xml.j2}, dest: '/tmp/config.xml' }
+```
+
+## assigning vars within the inventory file
+
+* you can assign vars in a few ways within the inventory file
+
+1. which inventory file is being used?  Refer to [config hierarchy](#config-hierarchy)
+```
+[vagrant@rhel8 ansible]$ ansible-config dump | grep HOST_LIST
+DEFAULT_HOST_LIST(/home/vagrant/.ansible.cfg) = ['/home/vagrant/inventory']
+```
+
+2. you can assign variables to hosts, such as `max_connections`
+
+```
+vim /home/vagrant/inventory
+[rhel]
+192.168.33.11
+
+[stream]
+192.168.33.12
+
+[ubuntu]
+192.168.33.13 max_connections=10000
+
+[Redhat:children]
+stream
+rhel
+```
+
+3. you can assign variables to be available to hosts in groups:
+
+* note that you can assign a host to multiple groups.
+  
+```
+[rhel]
+192.168.33.11 max_connections=10000
+
+[stream]
+192.168.33.12 max_connections=5000
+
+[ubuntu]
+192.168.33.13 max_connections=5000
+
+[Redhat:children]
+stream
+rhel
+
+[frontend:children]
+rhel
+
+[backend:children]
+ubuntu
+stream
+
+[frontend:vars]
+host_role='frontend'
+
+[backend:vars]
+host_role='backend'
+
+[all:vars]
+section_header='[global_config]'
+```
+
+4. review the inventory structure:
+```
+[vagrant@rhel8 ansible]$ ansible-inventory --graph
+@all:
+  |--@Redhat:
+  |  |--@rhel:
+  |  |  |--192.168.33.11
+  |  |--@stream:
+  |  |  |--192.168.33.12
+  |--@backend:
+  |  |--@ubuntu:
+  |  |  |--192.168.33.13
+  |--@frontend:
+  |  |--@rhel:
+  |  |  |--192.168.33.11
+  |  |--@stream:
+  |  |  |--192.168.33.12
+  |--@ungrouped:
+```
+
+5. inventory host vars can also be configured via files within the `host_vars` and `group_vars` subdirectory (see [inventory vars](#implement-inventory-variables) section) that are at the same level as the inventory file
+
+     a. you can view hostvars:
+     ```
+     [vagrant@rhel8 ~]$ ansible-inventory --list
+     {
+         "Redhat": {
+             "children": [
+                 "rhel",
+                 "stream"
+             ]
+         },
+         "_meta": {
+             "hostvars": {
+                 "192.168.33.11": {
+                     "ansible_connection": "local",
+                     "apache_pkg": "httpd",
+                     "apache_src": "httpd",
+                     "chrony_conf": "/etc/chrony.conf",
+                     "chrony_svc": "chronyd",
+                     "host_role": "frontend",
+                     "section_header": "[global_config]"
+                 },
+                 "192.168.33.12": {
+                     "apache_pkg": "httpd",
+                     "apache_src": "httpd",
+                     "chrony_conf": "/etc/chrony.conf",
+                     "chrony_svc": "chronyd",
+                     "host_role": "frontend",
+                     "section_header": "[global_config]"
+                 },
+                 "192.168.33.13": {
+                     "apache_pkg": "apache2",
+                     "apache_src": "apache2",
+                     "chrony_conf": "/etc/chrony/chrony.conf",
+                     "chrony_svc": "chrony",
+                     "host_role": "backend",
+                     "max_connections": 10000,
+                     "section_header": "[global_config]"
+                 }
+             }
+         },
+     <snip>
+     ```
+
+## var substitution
+
+1. connect to the rhel8 VM and create the lab structure
+
+```
+vagrant ssh rhel8
+cd ~/ansible
+mkdir -p ./module2/templates
+```
+   
+2. create a template in the templates subdir
+```
+cd ~/ansible/module2
+cat << EOF | tee ./templates/app_config.j2
+#config for app that will render straight through
+{# this comment does not get rendered in the destination file #}
+{{ section_header }}
+host_role={{ host_role }}
+max_connections={{ max_connections }}
+EOF
+```
+
+3. create the playbook that calls the template module
+
+```
+cd ~/ansible/module2
+cat << EOF | tee ./template1.yml
+- hosts: all
+  tasks:
+  - name: template generator for app.conf
+    template:
+      src: app_config.j2
+      dest: /tmp/app.conf
+EOF
+```
+
+4. run the template generator playbook
+```
+ansible-playbook template1.yml
+```
+
+5. validate the templating worked as expected
+* note the host_role and max_connections matches the vars that were set
+```
+# on rhel8
+[vagrant@rhel8 module2]$ cat /tmp/app.conf
+#config for app that will render straight through
+[global_config]
+host_role= frontend
+max_connections= 10000
+
+# on ubuntu
+vagrant@ubuntu:~$ cat /tmp/app.conf
+#config for app that will render straight through
+[global_config]
+host_role= backend
+max_connections= 5000
+```
+
+* note that ansible facts are also accessible, such as...
+```
+{{ ansible_facts.eth1.ipv4.address }}
+```
+
+
