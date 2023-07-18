@@ -1,4 +1,4 @@
-* https://app.pluralsight.com/course-player?clipId=89c8a865-1f08-40f6-92d9-0e905e152405
+* https://app.pluralsight.com/course-player?clipId=667380ab-984f-46b3-a41c-747f83982556
 
 
 cd ~/vagrant/ansible
@@ -2227,4 +2227,496 @@ max_connections= 5000
 {{ ansible_facts.eth1.ipv4.address }}
 ```
 
+## filters
+
+* filters transform data
+* pipeline processing
+* can chain filters
+* filters may have arguments
+* you may provide a value for an if undefined by pipelining `default()`
+* you can cast between data types
+
+1. create the playbook example
+
+```
+cd ~/ansible/module2
+cat << EOF | tee filter.yml
+- hosts: all
+  vars:
+    employee1:
+      name: Maya
+      job: Developer
+      skill: Advanced
+  tasks:
+  - name: transform dict into list
+    template:
+      src: filter.j2
+      dest: /tmp/filter.out
+EOF
+```
+
+2. create the filter
+```
+cat << EOF | tee ./templates/filter.j2
+{{ employee1 }}
+{{ employee1 | dict2items }}
+EOF
+```
+
+3. run playbook
+
+```
+ansible-playbook filter.yml
+```
+
+4. check output
+* the first line is the dict
+* the second line is the key, value list structure provides as output of `dict2items`
+```
+[vagrant@rhel8 module2]$ cat /tmp/filter.out
+{'name': 'Maya', 'job': 'Developer', 'skill': 'Advanced'}
+[{'key': 'name', 'value': 'Maya'}, {'key': 'job', 'value': 'Developer'}, {'key': 'skill', 'value': 'Advanced'}]
+```
+
+* refer to https://jinja.palletsprojects.com/en/3.0.x/templates/#builtin-filters
+
+## conditionals
+
+* used conditionally to include blocks of texts in a template
+* can use variables, and nested if blocks
+* if, elif, else, endif
+* tests, comparisons, logical operators
+
+### tests
+
+* https://jinja.palletsprojects.com/en/3.0.x/templates/#builtin-tests
+* format leverages the `is` keyword
+```
+{% if app is defined %}
+do this
+{% endif %}
+```
+
+### comparisons
+
+* https://jinja.palletsprojects.com/en/3.0.x/templates/#comparisons
+* format leverages comparison operators
+
+```
+{% if country =="united states" %}
+do this
+{% endif %}
+```
+
+### logical operators
+
+* https://jinja.palletsprojects.com/en/3.0.x/templates/#logic
+* and, or, not
+
+## loops
+
+* iterate over each item
+
+```
+{% for item in items %}
+{{ item }}
+{% endfor %}
+```
+
+### workthrough magic variable groups[]
+
+1. establish template file
+
+```
+cd ~/ansible/module2
+cat << EOF | tee ./templates/magic.j2
+{% for node in groups['all'] %}
+  {{ node }}
+{% endfor %}
+EOF
+```
+
+2. establish the task file
+
+```
+cat << EOF | tee magic_vars.yml
+- hosts: all
+  tasks:
+  - name: loop example
+    template:
+      src: magic.j2
+      dest: /tmp/conf.txt
+EOF
+```
+
+3. run the playbook
+
+```
+[vagrant@rhel8 module2]$ ansible-playbook magic_vars.yml
+
+PLAY [all] *******************************************************************************************************************************************************************************************
+
+TASK [Gathering Facts] *******************************************************************************************************************************************************************************
+ok: [192.168.33.11]
+ok: [192.168.33.12]
+ok: [192.168.33.13]
+
+TASK [loop example] **********************************************************************************************************************************************************************************
+changed: [192.168.33.13]
+changed: [192.168.33.11]
+changed: [192.168.33.12]
+
+PLAY RECAP *******************************************************************************************************************************************************************************************
+192.168.33.11              : ok=2    changed=1    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+192.168.33.12              : ok=2    changed=1    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+192.168.33.13              : ok=2    changed=1    unreachable=0    failed=0    skipped=0    rescued=0    ignored=0
+```
+
+4. validate template
+```
+[vagrant@rhel8 module2]$ cat /tmp/conf.txt
+  192.168.33.12
+  192.168.33.11
+  192.168.33.13
+```
+
+5. modify the template so that all new line characters are eliminated (with the `-``), rerun and inspect output.
+
+```
+cat << EOF | tee ./templates/magic.j2
+{% for node in groups['all'] %}
+  {{ node }}
+{%- endfor %}
+EOF
+ansible-playbook magic_vars.yml
+[vagrant@rhel8 module2]$ cat /tmp/conf.txt
+  192.168.33.12  192.168.33.11  192.168.33.13
+```
+
+6. enrich the template, rerun and inspect output
+
+```
+cat << EOF | tee ./templates/magic.j2
+host_list={% for node in groups['all'] %}
+  {{ node }}:8080
+{%- endfor %}
+EOF
+ansible-playbook magic_vars.yml
+[vagrant@rhel8 module2]$ cat /tmp/conf.txt
+host_list=  192.168.33.12:8080  192.168.33.11:8080  192.168.33.13:8080
+```
+
+### using magic variables: hostvars
+
+1. create a template
+```
+cat << EOF | tee ./templates/magic.j2
+host_list={% for node in groups['Redhat'] %}
+  {{ node }} {{ hostvars[node].ansible_facts.eth1.ipv4.address }}
+{%- endfor %}
+EOF
+```
+
+2. run and validate hostvars output
+
+```
+ansible-playbook magic_vars.yml
+[vagrant@rhel8 module2]$ cat /tmp/conf.txt
+host_list=  192.168.33.12 192.168.33.12  192.168.33.11 192.168.33.11
+```
+
+## demo: deploy chrony config
+
+1. review a chrony.conf file:
+```
+# public servers from the pool.ntp.org project
+server 0.pool.ntp.org
+server 1.pool.ntp.org
+server 2.pool.ntp.org
+server 3.pool.ntp.org
+
+# record the rate at which the system clock gains/loses time
+driftfile /var/lib/chrony/drift
+
+# allow the system clock to be corrected in the first three updates if error is above 1
+makestep 1.0 3
+
+# enable periodically syncing RTC & system time
+rtcsync
+
+# specify directory for log files
+logdir /var/log/chrony
+```
+
+2. build the playbook that will affect a template
+```
+cd ~/ansible/module2
+cat << EOF | tee ntp.yml
+- hosts: all
+  vars:
+  - ntp_pool1:
+    - 0.pool.ntp.org
+    - 1.pool.ntp.org
+  - ntp_pool2:
+    - 2.pool.ntp.org
+    - 3.pool.ntp.org
+  tasks:
+  - name: render ntp conf
+    template:
+      src: chrony.j2
+      dest: /tmp/chrony.conf
+EOF
+```
+
+3. build the template, leveraging the host_role var set earlier in the inventory file:
+
+```
+cat << EOF | tee ./templates/chrony.j2
+# public servers from the pool.ntp.org project
+{% if host_role == 'frontend' %}
+{% for server in ntp_pool1 %}
+server {{ server}}
+{% endfor %}
+{% elif host_role == 'backend' %}
+{% for server in ntp_pool2 %}
+server {{ server}}
+{% endfor %}
+{% endif %}
+
+# record the rate at which the system clock gains/loses time
+driftfile /var/lib/chrony/drift
+
+# allow the system clock to be corrected in the first three updates if error is above 1
+makestep 1.0 3
+
+# enable periodically syncing RTC & system time
+rtcsync
+
+# specify directory for log files
+logdir /var/log/chrony
+EOF
+```
+
+4. run the playbook to generate the /tmp/chrony.conf file and enum the /tmp/chrony.conf file on a "front_end" and "back_end" server:
+
+```
+ansible-playbook ntp.yml
+
+[vagrant@rhel8 module2]$ cat /tmp/chrony.conf
+# public servers from the pool.ntp.org project
+server 0.pool.ntp.org
+server 1.pool.ntp.org
+
+# record the rate at which the system clock gains/loses time
+driftfile /var/lib/chrony/drift
+
+# allow the system clock to be corrected in the first three updates if error is above 1
+makestep 1.0 3
+
+# enable periodically syncing RTC & system time
+rtcsync
+
+# specify directory for log files
+logdir /var/log/chrony
+
+
+vagrant@ubuntu:~$ cat /tmp/chrony.conf
+# public servers from the pool.ntp.org project
+server 2.pool.ntp.org
+server 3.pool.ntp.org
+
+# record the rate at which the system clock gains/loses time
+driftfile /var/lib/chrony/drift
+
+# allow the system clock to be corrected in the first three updates if error is above 1
+makestep 1.0 3
+
+# enable periodically syncing RTC & system time
+rtcsync
+
+# specify directory for log files
+logdir /var/log/chrony
+```
+
+# modular configuration with roles
+
+## what are roles
+* allows for code reuse
+* focused to do one thing well
+* not a playbook alternative
+* yaml and packaged with associated assets
+
+## role directory structure
+* have predefined
+* top level directory defines the name of the role itself
+* there are eight standard subdirs:
+  * `defaults`: stores variable definitions, have lower precedence than `./vars/*`
+  * `files`: statis config files or scripts that need to be transferred to hosts
+  * `handlers`
+  * `meta`: provides documentation, specifically in two sections:
+    * galaxy_info: provides information when uploading the role to ansible galaxy repo
+    * dependencies. this role will automatically pull in other roles.
+      ```
+      ---
+      dependencies:
+        - { role: common, some_parameter: 3}
+        - { role: apache, port: 80 }
+        - { role: postgres, dbname: blarg, other_parameter: 12 }
+      ```
+  * `tasks`: includes all role tasks
+  * `templates`
+  * `tests`: setups up a test inventory and test cases
+  * `vars`: stores variable definitions, have higher precedence than `./defaults/*`
+* the roles search path can be affected by ansible.cfg, but it's also relative to the playbook in `./roles/`
+```
+vagrant@ubuntu:~$ ansible-config dump | grep role
+DEFAULT_ROLES_PATH(default) = ['/home/vagrant/.ansible/roles', '/usr/share/ansible/roles', '/etc/ansible/roles']
+```
+
+### creating the role directory structure
+* Option A. create the structure manually
+* Option B. use `ansible-galaxy init role_name`` command
+
+1. on rhel8, create env and role dir
+```
+mkdir ~/ansible/module3 && cd ~/ansible/module3
+mkdir roles && cd roles
+ansible-galaxy init ntp
+```
+2. inspect
+```
+[vagrant@rhel8 roles]$ ls -laRd $PWD/*/*/*
+-rw-rw-r--. 1 vagrant vagrant   27 Jul 18 09:39 /home/vagrant/ansible/module3/roles/ntp/defaults/main.yml
+-rw-rw-r--. 1 vagrant vagrant   27 Jul 18 09:39 /home/vagrant/ansible/module3/roles/ntp/handlers/main.yml
+-rw-rw-r--. 1 vagrant vagrant 1637 Jul 18 09:39 /home/vagrant/ansible/module3/roles/ntp/meta/main.yml
+-rw-rw-r--. 1 vagrant vagrant   24 Jul 18 09:39 /home/vagrant/ansible/module3/roles/ntp/tasks/main.yml
+-rw-rw-r--. 1 vagrant vagrant   11 Jul 18 09:39 /home/vagrant/ansible/module3/roles/ntp/tests/inventory
+-rw-rw-r--. 1 vagrant vagrant   61 Jul 18 09:39 /home/vagrant/ansible/module3/roles/ntp/tests/test.yml
+-rw-rw-r--. 1 vagrant vagrant   23 Jul 18 09:39 /home/vagrant/ansible/module3/roles/ntp/vars/main.yml
+
+[vagrant@rhel8 roles]$ tree ntp
+ntp
+├── defaults
+│   └── main.yml
+├── files
+├── handlers
+│   └── main.yml
+├── meta
+│   └── main.yml
+├── README.md
+├── tasks
+│   └── main.yml
+├── templates
+├── tests
+│   ├── inventory
+│   └── test.yml
+└── vars
+    └── main.yml
+```
+
+## create role content for ntp
+* `tasks/main.yml`: you can include tasks, or `include_tasks`
+
+1. build `tasks/main.yml`
+```
+cd ntp
+cat << EOF | tee ./tasks/main.yml
+---
+# tasks file for ntp
+- name: make sure chrony is installed
+  package:
+    name: chrony
+    state: present
+- name: ntp conf
+  template:
+    src: chrony.j2
+    dest: /etc/chrony.conf
+    mode: 0644
+    owner: root
+  notify: restart chrony daemon
+- name: set tz
+  timezone:
+    name: "America/New_York"
+EOF
+```
+
+2. build `handler/main.yml`
+
+```
+cat << EOF | tee ./handlers/main.yml
+---
+# handlers file for ntp
+- name: restart chrony daemon
+  service:
+    name: chronyd
+    state: restarted
+EOF
+```
+
+3. build the `templates/chrony.j2`
+
+```
+cat << EOF | tee ./templates/chrony.j2
+# public servers from the pool.ntp.org project
+{% if host_role == 'frontend' %}
+{% for server in ntp_pool1 %}
+server {{ server}}
+{% endfor %}
+{% elif host_role == 'backend' %}
+{% for server in ntp_pool2 %}
+server {{ server}}
+{% endfor %}
+{% endif %}
+
+# record the rate at which the system clock gains/loses time
+driftfile /var/lib/chrony/drift
+
+# allow the system clock to be corrected in the first three updates if error is above 1
+makestep 1.0 3
+
+# enable periodically syncing RTC & system time
+rtcsync
+
+# specify directory for log files
+logdir /var/log/chrony
+EOF
+```
+
+4. build `defaults/main.yml` to store variables used in our chrony playbook
+
+```
+cat << EOF | tee ./defaults/main.yml
+---
+# defaults file for ntp
+  ntp_pool1:
+    - 0.pool.ntp.org
+    - 1.pool.ntp.org
+  ntp_pool2:
+    - 2.pool.ntp.org
+    - 3.pool.ntp.org
+EOF
+```
+
+## create playbook to tie the room together, man
+
+1. create a playbook, calling the role `ntp`
+
+```
+cd ~/ansible/module3
+cat << EOF | tee ntp_deploy.yml
+---
+- name: deploy ntp
+  hosts: all
+  become: yes
+  roles:
+  - ntp
+EOF
+```
+
+2. run the playbook
+
+```
+cd ~/ansible/module3
+ansible-playbook ntp_deploy.yml
+```
 
