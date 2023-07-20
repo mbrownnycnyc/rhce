@@ -1959,6 +1959,41 @@ EOF
 ansible-playbook p1.yaml
 ```
 
+# configuring ssh client connectivity to vagrant controlled VMs
+
+* before we proceed to the segment/course, it will serve you well to configure vscode remote-ssh so you can use it going forward.
+  * note that the remote-ssh server process can run as an unprivileged user, but requires port forwarding to be enabled on the target server.
+* I'm a Windows user, so I assume you have a native ssh client installed.
+
+1. append the vagrant ssh config to the ssh config
+
+```
+cd ~/vagrant/ansible
+#the command will output invalid chars to stdout that vscode doesn't like
+vagrant ssh-config >> ~/.ssh/config
+```
+* note that vscode bugs out a bit regarding the ssh config file contents.  Not certain why this is, but steps 3-7 resolve the issue.
+  
+1. open vscode, on the left side navigate to the extensions, find and install remote-ssh.
+
+2. within a vscode, bring up the command pallette with ctrl+shift+p and type "remote-ssh".
+
+3. locate "remote-ssh: connect to host..." and hit enter
+
+4. add new host, and enter "test", select your ~/.ssh/config as the target and then click open config... you might be prompted that the file is binary... if you can't open it, start a new vscode window and then go to file-> open and open it that way.
+   
+5. you should now see a bunch of non printable chars in addition to the appended entry for "test".  Delete all the nonprintable chars by replacing them with "", then save.
+
+6. Now you should have the entries in the list of remote-ssh hosts, so connect to rhel8, allow the vscode server to install (note that if you wish to uninstall, you should do so via the remote-ssh command pallette item rather than messing around with the directory on the target server).
+
+7. after connecting the vscode instance, on the pane, select the top icon for "explorer" and click open folder.  This will give you access to the target node's file system, select `/home/vagrant/`, then trust.
+
+8. within this window, find and install the ansible extension.
+
+9. navigate to a yml file, open it.  It is likely that vscode will recognize the file as yaml.  You can change the syntax highlighting by clicking the file type in the bottom toolbar... click where it says "YAML" and change to "ansible."  auto-detection doesn't seem to work well.
+
+
+
 # jinja2 templating with ansible
 
 * review template concepts
@@ -2720,3 +2755,131 @@ cd ~/ansible/module3
 ansible-playbook ntp_deploy.yml
 ```
 
+## converting from playbooks into roles 
+
+* isolate related tasks and content
+* initialize a new role
+* move related content into roles
+
+### best practices for roles
+* restrict functionality to a specific task (ie: install chrony)
+* generic and simple
+* use version control
+* follow general ansible best practices
+  * idempotency
+  * naming conventions
+
+1. generate/inspect initial playbook
+```
+cd ~/ansible/module3
+cat << EOF | tee lampstack.yml
+---
+- hosts: stream
+  become: yes
+# apache config
+  tasks:
+    - name: install appache
+      package:
+        name: http, httpd-tools
+        state: present
+        update_cache: true
+    - name: install packages
+      yum:
+        name:
+          - php
+          - php-mysqlnd
+          - epel-release
+        state: present
+        update_cache: true
+    - name: start apache service
+      service:
+        name: http
+        state: started
+    - name: deploy index.php
+      copy:
+        src: index.php
+        dest: "{{ document_root_path }}"
+        mode: 0775
+    - name: copy vhost config
+      template:
+        src: site_config.j2
+        dest: "{{ vhost_config_file }}"
+        owner: root
+        group: root
+        mode: 0644
+      notify: restart apache
+    - name: config httpd.conf
+      lineinfile:
+        path: "{{ apache_config_file }}"
+        regexp: "^IncludeOptional" conf.d/*.conf""
+        line: "IncludeOptional conf.d/*.conf"
+      notify: restart apache
+#mysql config
+    - name: install db packages
+      package:
+        - name:
+          - mariadb-server
+          - python3-mysqlclient
+          update_cache: true
+          state: present
+    - name: start mysql
+      service:
+        name: mariadb
+        state: started
+        enabled: true
+    - name: create a new db
+      mysql_db:
+        name: "{{ db_name }}"
+        state: present
+        collation: utf8_general_ci
+    - name: create a db user
+      mysql_user:
+        name: "{{ db_user }}"
+        password: "{{ db_user_pass }}"
+        priv: "{{ db_user_priv }}"
+        host: "{{ db_allowed_hosts }}"
+        state: present
+    - name: allow localhost
+      mysql_user:
+        name: "{{ db_user }}"
+        password: "{{ db_user_pass }}"
+        priv: "{{ db_user_priv }}"
+        host: "{{ db_allowed_hosts }}"
+        state: present
+    - name: copy sample data
+      copy:
+        src: demo.sql
+        dest: /tmp/demo.sql
+    - name: insert sample data
+      shell: cat /tmp/demo.sql | mysql -u demo -pdemo demo
+#standalone tasks
+    - name: install script with db connectivity
+      copy:
+        src: db.php
+        dest: "{{ document_root_path }}db.php"
+        mode: 0775
+  handlers:
+    - name: restart apache
+      service:
+        name: httpd
+        state: restarted
+EOF
+```
+
+2. initial the roles
+
+```
+cd ~/ansible/module3
+mkdir ./roles; cd ./roles
+[vagrant@rhel8 roles]$ ansible-galaxy init apache
+le-galaxy init mysql- Role apache was created successfully
+[vagrant@rhel8 roles]$ ansible-galaxy init mysql
+- Role mysql was created successfully
+```
+
+3. migrate tasks into the roles
+
+* every tasks under "#apache config" can be removed from the above file and moved into `./roles/apache/tasks/main.yml`
+```
+
+```
