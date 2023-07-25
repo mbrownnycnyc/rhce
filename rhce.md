@@ -8,6 +8,9 @@ vagrant up --parallel
 * https://app.pluralsight.com/explore/certifications/topics/linux?trackId=43182a5e-279a-4ef6-808c-c3f62d01ed57&examPrepId=0e4f07d3-5443-4d9c-9331-2a886c87bdb6
 
 
+# table of contents
+
+- [table of contents](#table-of-contents)
 - [Linux Administration with Ansible: Getting Started with Ansible Automation](#linux-administration-with-ansible-getting-started-with-ansible-automation)
 - [Managing a growing linux estate](#managing-a-growing-linux-estate)
   - [introduction](#introduction)
