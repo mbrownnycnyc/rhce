@@ -108,6 +108,7 @@ vagrant up --parallel
   - [create playbook to tie the room together, man](#create-playbook-to-tie-the-room-together-man)
   - [converting from playbooks into roles](#converting-from-playbooks-into-roles)
     - [best practices for roles](#best-practices-for-roles)
+    - [lab: split up a single lamp stack playbook into roles](#lab-split-up-a-single-lamp-stack-playbook-into-roles)
 
 
 # Linux Administration with Ansible: Getting Started with Ansible Automation
@@ -2872,7 +2873,9 @@ ansible-playbook ntp_deploy.yml
   * idempotency
   * naming conventions
 
-1. generate/inspect initial playbook
+### lab: split up a single lamp stack playbook into roles
+
+1. generate and review initial playbook
 ```
 cd ~/ansible/module3
 cat << EOF | tee lampstack.yml
@@ -2883,7 +2886,7 @@ cat << EOF | tee lampstack.yml
   tasks:
     - name: install appache
       package:
-        name: http, httpd-tools
+        name: httpd, httpd-tools
         state: present
         update_cache: true
     - name: install packages
@@ -2896,7 +2899,7 @@ cat << EOF | tee lampstack.yml
         update_cache: true
     - name: start apache service
       service:
-        name: http
+        name: httpd
         state: started
     - name: deploy index.php
       copy:
@@ -2914,17 +2917,17 @@ cat << EOF | tee lampstack.yml
     - name: config httpd.conf
       lineinfile:
         path: "{{ apache_config_file }}"
-        regexp: "^IncludeOptional" conf.d/*.conf""
+        regexp: "^IncludeOptional"
         line: "IncludeOptional conf.d/*.conf"
       notify: restart apache
-#mysql config
+    #mysql config
     - name: install db packages
       package:
-        - name:
+        name:
           - mariadb-server
           - python3-mysqlclient
-          update_cache: true
-          state: present
+        update_cache: true
+        state: present
     - name: start mysql
       service:
         name: mariadb
@@ -2969,20 +2972,235 @@ cat << EOF | tee lampstack.yml
 EOF
 ```
 
-2. initial the roles
+2. initiate the roles
 
 ```
 cd ~/ansible/module3
 mkdir ./roles; cd ./roles
 [vagrant@rhel8 roles]$ ansible-galaxy init apache
-le-galaxy init mysql- Role apache was created successfully
+- Role apache was created successfully
 [vagrant@rhel8 roles]$ ansible-galaxy init mysql
 - Role mysql was created successfully
 ```
 
-3. migrate tasks into the roles
+3. migrate apache related tasks into a role
 
 * every tasks under "#apache config" can be removed from the above file and moved into `./roles/apache/tasks/main.yml`
 ```
+cd /home/vagrant/ansible/module3/roles
+cat << EOF | tee ./apache/tasks/main.yml
+    ---
+    - name: install appache
+      package:
+        name: httpd, httpd-tools
+        state: present
+        update_cache: true
+    - name: install packages
+      yum:
+        name:
+          - php
+          - php-mysqlnd
+          - epel-release
+        state: present
+        update_cache: true
+    - name: start apache service
+      service:
+        name: httpd
+        state: started
+    - name: deploy index.php
+      copy:
+        src: index.php
+        dest: "{{ document_root_path }}"
+        mode: 0775
+    - name: copy vhost config
+      template:
+        src: site_config.j2
+        dest: "{{ vhost_config_file }}"
+        owner: root
+        group: root
+        mode: 0644
+      notify: restart apache
+    - name: config httpd.conf
+      lineinfile:
+        path: "{{ apache_config_file }}"
+        regexp: "^IncludeOptional"
+        line: "IncludeOptional conf.d/*.conf"
+      notify: restart apache
+EOF
+```
+
+4. create index.php at `./roles/apache/files/index.php`
+```
+cd /home/vagrant/ansible/module3/roles
+cat << EOF | tee ./apache/files/index.php
+<html>
+<head>
+<title>advanced ansible automation</title>
+</head>
+<body>
+<h1> welcome</h1>
+<p>this app is running on <?=gethostname()?> </p>
+</body>
+</html>
+EOF
+```
+
+5. create site_config.j2 at `./roles/apache/templates/site_config.j2`
+```
+cd /home/vagrant/ansible/module3/roles
+cat << EOF | tee ./apache/templates/site_config.j2
+<VirtualHost *:80>
+DocumentRoot {{ document_root_path }}
+ServerName demo.mydomain.com
+ErrorLog /var/log/httpd/error_log
+CustomLog /var/log/httpd/access_log combined
+</VirtualHost>
+EOF
+```
+
+6. every tasks under "#mysql config" can be removed from the playbook file and moved into `./roles/mysql/tasks/main.yml`
+```
+cd /home/vagrant/ansible/module3/roles
+cat << EOF | tee ./mysql/tasks/main.yml
+---
+    #mysql config
+    - name: install db packages
+      package:
+        name:
+          - mariadb-server
+          - python3-mysqlclient
+        update_cache: true
+        state: present
+    - name: start mysql
+      service:
+        name: mariadb
+        state: started
+        enabled: true
+    - name: create a new db
+      mysql_db:
+        name: "{{ db_name }}"
+        state: present
+        collation: utf8_general_ci
+    - name: create a db user
+      mysql_user:
+        name: "{{ db_user }}"
+        password: "{{ db_user_pass }}"
+        priv: "{{ db_user_priv }}"
+        host: "{{ db_allowed_hosts }}"
+        state: present
+    - name: allow localhost
+      mysql_user:
+        name: "{{ db_user }}"
+        password: "{{ db_user_pass }}"
+        priv: "{{ db_user_priv }}"
+        host: "{{ db_allowed_hosts }}"
+        state: present
+    - name: copy sample data
+      copy:
+        src: demo.sql
+        dest: /tmp/demo.sql
+    - name: insert sample data
+      shell: cat /tmp/demo.sql | mysql -u demo -pdemo demo
+EOF
+```
+
+7. create sql data file in `./roles/mysql/files/demo.sql`
 
 ```
+cd /home/vagrant/ansible/module3/roles
+cat << EOF | tee ./mysql/files/demo.sql
+CREATE TABLE IF NOT EXISTS demo (
+    message varchar(255) NOT NULL
+) ENGINE=MyISAM DEFAULT CHARSET=utf8;
+
+INSERT INTO demo (message) VALUES('hello world');
+EOF
+```
+
+8. move the handler into `./roles/apache/handlers/main.yaml`
+
+```
+cd /home/vagrant/ansible/module3/roles
+cat << EOF | tee ./apache/handlers/main.yml
+---
+    - name: restart apache
+      service:
+        name: httpd
+        state: restarted
+EOF
+```
+
+9. create a vars file in the mysql role
+* consider the fact that these will be globally available vars to any playbook where this role is included/executed.
+  * therefore, we name each var with a (hopefully) unique name
+
+```
+cd /home/vagrant/ansible/module3/roles
+cat << EOF | tee ./mysql/defaults/main.yml
+---
+mysql_db_name: demo
+mysql_db_user: demo
+mysql_db_user_pass: demo
+mysql_db_user_priv: '*.*:ALL'
+mysql_db_allowed_hosts: '%'
+EOF
+```
+
+10. update the `roles/mysql/tasks/main.yml` file with the "new" var names
+```
+cd /home/vagrant/ansible/module3/roles
+sed s/db_/mysql_db_/g ./mysql/tasks/main.yml -i
+```
+
+11. create a vars file in the apache role
+* consider the fact that these will be globally available vars to any playbook where this role is included/executed.
+  * therefore, we name each var with a (hopefully) unique name
+
+```
+cd /home/vagrant/ansible/module3/roles
+cat << EOF | tee ./apache/defaults/main.yml
+apache_vhost_config_file: /etc/httpd/conf.d/demo.conf
+apache_apache_config_file: /etc/httpd/conf/httpd.conf
+apache_document_root_path: /var/www/demo
+EOF
+```
+
+12.  update the `roles/apache/tasks/main.yml`, `roles/apache/templates/site_config.j2`, and `/home/vagrant/ansible/module3/lampstack.yml` files with the "new" var names
+
+```
+cd /home/vagrant/ansible/module3/roles
+sed s/vhost_config_file/apache_vhost_config_file/g -i ./apache/tasks/main.yml
+sed s/vhost_config_file/apache_vhost_config_file/g -i ./apache/templates/site_config.j2
+sed s/vhost_config_file/apache_vhost_config_file/g -i /home/vagrant/ansible/module3/lampstack.yml
+sed s/apache_config_file/apache_apache_config_file/g -i ./apache/tasks/main.yml
+sed s/apache_config_file/apache_apache_config_file/g -i ./apache/templates/site_config.j2
+sed s/apache_config_file/apache_apache_config_file/g -i /home/vagrant/ansible/module3/lampstack.yml
+sed s/document_root_path/apache_document_root_path/g -i ./apache/tasks/main.yml
+sed s/document_root_path/apache_document_root_path/g -i ./apache/templates/site_config.j2
+sed s/document_root_path/apache_document_root_path/g -i /home/vagrant/ansible/module3/lampstack.yml
+```
+
+13. review the final state of `/home/vagrant/ansible/module3/lampstack.yml`
+* note the use of `roles` and the simplified task list
+```
+- hosts: stream
+  become: yes
+  roles:
+  - apache
+  - mysql
+  tasks:
+    - name: install script with db connectivity
+      copy:
+        src: db.php
+        dest: "{{ apache_document_root_path }}db.php"
+        mode: 0775
+```
+
+14. run the playbook in check mode
+
+```
+cd /home/vagrant/ansible/module3/
+ansible-playbook lampstack.yml -C -v
+```
+
+* REVISIT THIS as i'm rcving an error: `The PyMySQL (Python 2.7 and Python 3.X) or MySQL-python (Python 2.X) module is required` althought it's installed on both the controller and target
