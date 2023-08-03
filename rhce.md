@@ -111,7 +111,7 @@ vagrant up --parallel
     - [lab: split up a single lamp stack playbook into roles](#lab-split-up-a-single-lamp-stack-playbook-into-roles)
 
 
-# Linux Administration with Ansible: Getting Started with Ansible Automation
+# Course 1: Linux Administration with Ansible: Getting Started with Ansible Automation
 
 # Managing a growing linux estate
 
@@ -943,7 +943,7 @@ ansible all -m package -a "name={{ vim_editor }} state=absent"
 ansible all -m package -a "name={{ vim_editor }} state=present"
 ```
 
-# Linux Administration with Ansible: Writing Ansible Playbooks
+# Course 2: Linux Administration with Ansible: Writing Ansible Playbooks
 
 # writing in yaml
 
@@ -2097,6 +2097,7 @@ vagrant ssh-config >> ~/.ssh/config
 9. navigate to a yml file, open it.  It is likely that vscode will recognize the file as yaml.  You can change the syntax highlighting by clicking the file type in the bottom toolbar... click where it says "YAML" and change to "ansible."  auto-detection doesn't seem to work well.
 
 
+# Course 3: Linux Administration with Ansible: Advanced Ansible Autoation
 
 # jinja2 templating with ansible
 
@@ -3203,4 +3204,190 @@ cd /home/vagrant/ansible/module3/
 ansible-playbook lampstack.yml -C -v
 ```
 
-* REVISIT THIS as i'm rcving an error: `The PyMySQL (Python 2.7 and Python 3.X) or MySQL-python (Python 2.X) module is required` althought it's installed on both the controller and target
+* refer here if you have issues: https://stackoverflow.com/questions/56313083/ansible-ubuntu-18-04-mysql-the-pymysql-python-2-7-and-python-3-x-or-mys
+
+15. run the playbook:
+```
+cd /home/vagrant/ansible/module3/
+ansible-playbook lampstack.yml
+#mysql issues... we're moving on... the point isn't to spend time tshooting mysql (I don't have time right now)... instead to learn ansible roles.
+```
+
+### conditionals and execution order of roles
+
+1. three ways to use roles
+
+* at play level, with `roles` directive
+* at task level: `include_role` (dynamic reuse)
+* at task level: `import_role` (statis reuse)
+
+2. execution order:
+
+* play level `roles` directive executes before any tasks
+* `include_role` and `import_role` are executed in the order they are defined/called
+
+3. static vs dynamic
+
+* static imports: `import_roles` are processed inline, executed as static, the role can changed the execution environmental (such as variables)
+* dynamic imports: `include_roles` executed dynamically, do take in variables/environmental data
+
+### tagging roles
+
+1. tags are useful for selectively running roles or tasks within roles
+
+2. tagging statically reused roles will apply the tag to all tasks within the role
+
+3. to run selected tasks from a particular role:
+  * use the role with the `include_role` keyword and tag it
+  * tag the tasks withint he role with the same tag
+
+#### lab
+1. syntax example:
+```
+- name: deploy ntp
+  hosts: all
+  become: yes
+  tasks:
+  - include_roles:
+      name: ntp
+    tags: install
+```
+
+2. invocation using specify tags
+```
+ansible-playbook ntp_deploy.yml --tags install -i hosts
+```
+
+# content sharing with ansible galaxy
+
+## galaxy intro
+
+* ansible galaxy is the community hub for sharing content
+  * online repo of roles
+  * "Collections": modules, plugins, roles, playbooks and docs
+
+## downloading role from galaxy
+
+1. role installation path
+
+* default download locations:
+  * `~/.ansible/roles`
+  * `/usr/share/ansible/roles`
+  * `/etc/ansible/roles`
+* modify the download location:
+  * set `ANSIBLE_ROLES_PATH` env var
+  * define `roles_path` in `ansible.cfg`
+  * use the `--roles-path` arg when invoking `ansible-galaxy`
+
+### lab: download a role from ansible-galaxy, inspect the role
+
+1. mkdirs
+
+```
+cd /home/vagrant/ansible
+mkdir module4
+cd module4
+```
+
+2. download role
+
+```
+[vagrant@rhel8 module4]$ ansible-galaxy install --roles-path ./roles geerlingguy.ntp
+- downloading role 'ntp', owned by geerlingguy
+- downloading role from https://github.com/geerlingguy/ansible-role-ntp/archive/2.3.2.tar.gz
+- extracting geerlingguy.ntp to /home/vagrant/ansible/module4/roles/geerlingguy.ntp
+- geerlingguy.ntp (2.3.2) was installed successfully
+```
+
+3. inspect the role content
+
+```
+[vagrant@rhel8 module4]$ tree ./roles/geerlingguy.ntp/
+./roles/geerlingguy.ntp/
+├── defaults
+│   └── main.yml
+├── handlers
+│   └── main.yml
+├── LICENSE
+├── meta
+│   └── main.yml
+├── molecule
+│   └── default
+│       ├── converge.yml
+│       └── molecule.yml
+├── README.md
+├── tasks
+│   └── main.yml
+├── templates
+│   ├── chrony.conf.j2
+│   ├── clock.j2
+│   └── ntp.conf.j2
+└── vars
+    ├── Archlinux.yml
+    ├── Debian.yml
+    ├── FreeBSD.yml
+    ├── RedHat.yml
+    └── Suse.yml
+```
+
+4. note the `vars` files, and that the `vars` created attempt to use unique names
+```
+[vagrant@rhel8 module4]$ cat ./roles/geerlingguy.ntp/vars/RedHat.yml
+---
+__ntp_daemon: chronyd
+ntp_tzdata_package: tzdata
+__ntp_package: chrony
+__ntp_config_file: /etc/chrony.conf
+__ntp_driftfile: /var/lib/ntp/drift
+ntp_cron_daemon: crond
+```
+
+5. review the ./tasks/main.yaml to understand what the task is doing
+
+6. review the ./templates/* to understand what templates are provided
+
+7. create a playbook that uses the role
+
+```
+---
+- name: deploy ntp on test machines
+  hosts: test
+  become: yes
+  roles:
+  - geerlingguy.ntp
+```
+
+## collections overview
+
+* a collection may be: modules, plugins, roles, playbooks, etc
+
+1. where the find:
+* ansible galaxy: galaxy.ansible.com
+* automation hub (RHEL subscription): cloud.redhat.com/ansible/automation-hub
+* private automation hub (self hosted)
+
+### lab: collections
+
+1. upgrade ansible
+
+```
+ansible --version
+sudo yum -y remove ansible
+sudo pip3 install --upgrade pip
+python3 -m pip install --user ansible
+ansible --version
+```
+
+2. install community package
+```
+# https://galaxy.ansible.com/community/general
+ansible-galaxy collection install community.general
+```
+
+3. list modules
+
+```
+ansible-galaxy collection list
+```
+
+4. 
