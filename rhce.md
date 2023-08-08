@@ -3387,7 +3387,344 @@ ansible-galaxy collection install community.general
 3. list modules
 
 ```
-ansible-galaxy collection list
+# /home/vagrant/.ansible/collections/ansible_collections
+Collection        Version
+----------------- -------
+community.general 7.2.1
+
+# /home/vagrant/.local/lib/python3.6/site-packages/ansible_collections
 ```
 
-4. 
+4. navigate to the collection path
+
+```
+/home/vagrant/.local/lib/python3.6/site-packages/ansible_collections
+cd community
+ll
+cd general
+ls -l
+ll /plugins
+ll /plugins/filter
+ll /plugins/modules
+```
+
+## choosing the right role from Galaxy
+
+1. Go to galaxy.ansible.com
+
+2. search for ntp and filter on role
+
+## installing role from galaxy
+
+1. download community general
+
+```
+ansible-galaxy collection install community.general
+#specifying the version:
+ansible-galaxy collection install community.general:==3.5.0
+```
+
+2. you can have multiple versions of a collection.  use the ANSIBLE_COLLECTIONS_PATH or collections_paths directive in ansible.cfg (under `[defaults]` stanza) as a colon separated list.
+
+3. when you create a collection, you can create a `collections` subdir, then create a `requirements.yml`.  Here's an example requirements.yml:
+```
+collections:
+  - name: community.general
+    source: https://galaxy.ansible.com
+  - name: f5.nginx
+    source: https://cloud.redhat.com/api/automation-hub
+
+# and installing via a requirements
+ansible-galaxy install -r requirements.yml
+```
+
+## using collections
+
+1. you should use the `fully qualified collection name (FQCN)` as module names
+
+```
+- hosts: all
+  tasks:
+    - mynamespace.collection1.module_abc:
+      option: value
+    - mynamespace.collection2.module_abc:
+      option: value
+    - mynamespace.collection2.module_xyz:
+      option: value
+```
+
+2. you can avoid this, as long as there aren't any conflicts in shortnames, by using the collections keywords
+
+```
+- hosts:
+  collections:
+    - mynamespace.collection1.module_abc
+    - mynamespace.collection2.module_xyz
+  tasks:
+    - module_abc:
+      option: value
+    - module_xyz:
+      option: value
+```
+
+3. notes about roles:
+* roles won't inherit the `collections` var list.
+* instead use the `meta/main.yml` file or use FQCNs
+
+## correcting an existing code to FQCNs
+
+1. execute a role or playbook with `-vv` and the output will direct you to the FQCN used.
+
+# ansible vault
+
+* encrypts data at rest
+* allows encrypted integrated into ansible
+* vaults can be included in source control
+* encrypts files and vars
+
+## encrypting files with vault
+
+1. create a new vault and create an entry
+
+```
+cd /home/vagrant/ansible/
+mkdir module5; cd module5
+ansible-vault create vaultfile1.yml
+# set the password
+# enter some data
+db_admin_user: superuser
+```
+
+2. update the file:
+
+```
+ansible-vault edit vaultfile1.yml
+# enter the password
+# enter some additional data
+db_admin_password: mysecret
+```
+
+3. reviewing the vaultfile1.yml content
+```
+[vagrant@rhel8 module5]$ cat vaultfile1.yml
+$ANSIBLE_VAULT;1.1;AES256
+31353538643834663132623562626630653033326239366135663137616331353862323332363934
+3936323764343334666562303437336266666263376336370a326534373363363266323662313134
+61346564376264653065363338663764613837363937616564623861336437323330613635653139
+3032653865643835380a353966323538333930353233616639303433343365313065353965643738
+64346561653539303639333839353938646166353361663237656163636230343433616232336333
+62666537306362666266316333303666303662333535623237383161336533623830346162383838
+303038346561313331653432346637336631
+```
+
+4. to encrypt existing files
+```
+mkdir host_vars
+cat << EOF | tee ./host_vars/centos1.yml
+max_retries: 3
+cache_size: 10
+EOF
+ansible-vault encrypt ./host_vars/centos1.yml
+#set a password
+[vagrant@rhel8 module5]$ cat ./host_vars/centos1.yml
+$ANSIBLE_VAULT;1.1;AES256
+34383432613261306636313032303262336239353962616536383732626436326566363965633763
+6233343164303437653237663565373838633833646665340a373238316236356133366436386266
+30616630373231633134663665366639366531343639396137323138663831666463646135386239
+6438616663383335640a313839323531616565653366623636376261396633346431626333366334
+33336232366165646665333866353932613566643139326331393630633862373063
+```
+
+5. view the content of a vault
+
+```
+ansible-vault view ./host_vars/centos1.yml
+```
+
+6. decrypt a vault file:
+
+```
+ansible-vault decrypt ./host_vars/centos1.yml
+```
+
+7. rekey a vault file:
+```
+ansible-vault rekey vaultfile1.yml
+```
+
+### using a vaulted file
+
+1. you simply call it from a playbook as you would any other file
+
+```
+cat << EOF | tee vault_playbook1.yml
+---
+- hosts: localhost
+  vars_files:
+  - vaultfile1.yml
+  tasks:
+  - name: output encrypted content
+    debug:
+      msg: "{{ db_admin_user }}"
+EOF
+```
+
+2. entering the password at invocation
+
+* note that when using `--ask-vault-pass` all vaults that are called must use the same provided password.
+  * unless you use vault IDs...
+```
+ansible-playbook vault_playbook1.yml --ask-vault-pass
+```
+
+3. entering the password via the `--vault-password-file` argument, and store the password in a hidden file (that's been excluded from git in .git_ignore)
+
+```
+echo 'vpass2'> .vaultpass
+ansible-playbook vault_playbook1.yml --vault-password-file=.vaultpass
+```
+
+4. you can affect the environment by modifying the `ansible.cfg` and setting the vault_password_file var within the `[defaults]` stanza
+
+5. or you can also use an envvar:`ANSIBLE_VAULT_PASSWORD_FILE``
+
+## managing multiple passwords with vault IDs
+
+* using vault IDs helps differentiate between passwords (such as dev versus prod)
+* helps avoid password sharing among a team
+* to pass a vault ID as an option:
+```
+--vault-id label@source
+--encrypt-vault-id label@source
+```
+* the label can be anything
+* all items labeled do not need to share the same password
+
+1. create two encrypted files with different vault IDs
+```
+# to make this easier, we'll use an `ansible.cfg` within the path where we invoke the `ansible-playbook` command
+cd /home/vagrant/ansible/module5
+cat << EOF | tee ansible.cfg
+[defaults]
+connection = smart
+timeout = 60
+host_key_checking = false
+vault_password_file = ./.vaultpass
+vault_identity_list = dev@~/ansible/module5/.dev_pass , prod@~/ansible/module5/.prod_pass
+```
+
+2. store the password
+```
+echo 'devpass'> .dev_pass
+echo 'prodpass'> .prod_pass
+```
+
+3. encrypt with vault-id
+
+```
+ansible-vault create --encrypt-vault-id dev vault_dev.yml
+# set a var called "dev_variable"
+ansible-vault create --encrypt-vault-id prod vault_prod.yml
+# set a var called "prod_variable"
+```
+
+4. calling the vars from a playbook
+```
+cat << EOF | tee vault_playbook2.yml
+---
+- hosts: localhost
+  vars_files:
+  - vault_dev.yml
+  - vault_prod.yml
+  tasks:
+  - name: from dev
+    debug:
+      msg: "{{ dev_variable }}"
+  - name: from prod
+    debug:
+      msg: "{{ prod_variable }}"
+EOF
+```
+
+5. invoke
+```
+# since `vault_password_file` is set in `ansible.cfg`, you can just invoke as you would normally
+ansible-playbook vault_playbook2.yml
+```
+
+## encrypting single variables
+* you can encrypt just a string
+```
+ansible-vault encrypt_string [password_source] string_to_encrypt --name var_name
+```
+* you can mix both plaintext and encrypted vars
+* multiple vault IDs are supported
+* encrypted vars can't be rekeyed
+
+1. create an encrypted var
+
+```
+ansible-vault encrypt_string --encrypted-vault-id dev 'foobar' --name 'the_secret'
+#this will output the entire string to be included in a playbook (probably as a var)
+```
+
+# managing parallelism in ansible
+
+* performance becomes important for large fleets
+* how ansible works:
+  * parse and load inventory
+  * parse and load playbook
+  * start iterating
+    * for each play in the playbook
+    * for each task in the play
+    * for each host targeted in the play
+      * ansible runs the tasks on that host and collects the results
+* customizing default vehavior helps us
+  * tune performance
+  * control execution order
+
+## serials and forks
+
+* forks allows ansible to target multiple hosts in parallel
+* forks defaults to 5
+  
+1. set some host_vars in the inventory
+
+```
+#which inventory are we using?
+ansible-config dump | grep inventory
+ansible-inventory --graph
+
+#set some hostvars
+vim /home/vagrant/inventory
+#under [all:vars] set the following
+sleep_duration=1 
+```
+   
+2. create playbook
+
+```
+cd /home/vagrant/ansible
+mkdir module6; cd module6
+cat << EOF | tee parallelism.yml
+- name: parallelism demo
+  hosts: Redhat
+  gather_facts: false
+  tasks:
+    - command "sleep {{ sleep_duration }}"
+      register: result
+    - name: deneme debug
+      debug:
+        msg: "{{ inventory_hostname}} task1 {{ result.start }} - {{ result.end }}"
+EOF
+```
+
+3. invoking the playbook and reviewing the output will show that all hosts are targeted at the same time, because there are 5 forks and 3 inventory hosts.
+
+4. adjust the forks value in ansible.cfg in the module6 directory to `1`
+* you can just here, or you can use `--forks`
+
+### serial
+* you can also use the `serial` keyword to restrict targeting hosts to a configured number of threads
+* you can set to a number, a percentage of total hosts, or a list of nubmers of hosts
+* serial affects the number of hosts targeted at a given time
